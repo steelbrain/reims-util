@@ -2,7 +2,7 @@
 //! progress and the result are JSON lines on stdout (progress.rs), and the last line is a `done`
 //! event with what was written, or an `error` event.
 
-use crate::opencore::{self, config, smbios};
+use crate::opencore::{self, added, config, smbios};
 use crate::progress::{self, JsonReporter, Reporter, TextReporter};
 use crate::{installer, recovery};
 use anyhow::{Context, Result, bail};
@@ -108,17 +108,23 @@ pub struct OpencoreArgs {
     /// Show OpenCore's boot picker at every boot (by default OpenCore boots the default entry)
     #[arg(long)]
     pub show_picker: bool,
-    /// Leave out Lilu, ReimsVgpu.kext, the apv-arm64-port kexts and reims-vgpu-video's, so
-    /// macOS 26 drives reims-vgpu's GPU with its driver as it is
+    /// Leave out Lilu and ReimsVgpu.kext, so macOS 26 drives reims-vgpu's GPU with its driver as
+    /// it is (kexts given with --add-kext still go in)
     #[arg(long)]
     pub no_kexts: bool,
-    /// Leave out the apv-arm64-port kexts, and with them reims-vgpu-video's, which link against
-    /// their mapper
-    #[arg(long)]
-    pub no_apv_arm64_port: bool,
-    /// Leave out reims-vgpu-video's kexts, the VideoToolbox and scaler devices' guest drivers
-    #[arg(long)]
-    pub no_video: bool,
+    /// Add a kext bundle, loaded after Lilu and ReimsVgpu.kext on Darwin MIN to MAX (default
+    /// 25.0.0 to 25.99.99, macOS 26). Repeat it for more: they load in the order given
+    #[arg(long = "add-kext", value_name = "PATH[,MIN[,MAX]]", value_parser = added::parse)]
+    pub add_kext: Vec<added::Spec>,
+    /// Accepted and ignored: --no-apv-arm64-port and --no-video, whose kexts images no longer
+    /// carry
+    #[arg(
+        long = "no-apv-arm64-port",
+        alias = "no-video",
+        hide = true,
+        action = clap::ArgAction::Count
+    )]
+    pub _retired: u8,
     /// Write no OVMF files
     #[arg(long)]
     pub no_ovmf: bool,
@@ -356,8 +362,7 @@ pub fn opencore_options(a: &OpencoreArgs) -> Result<opencore::Options> {
             show_picker: a.show_picker,
             kexts: !a.no_kexts,
         },
-        apv_arm64_port: !a.no_apv_arm64_port,
-        video: !a.no_video,
+        add_kexts: a.add_kext.clone(),
         ovmf_dir,
     })
 }

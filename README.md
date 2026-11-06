@@ -85,9 +85,8 @@ What's in the image, and why:
   has it ask for the one arm64 guests use (245), and patches what the driver and its Metal plugin
   hardcode, so Metal offers the GPU families GPU-accelerated Chrome needs, and D32S8
   depth/stencil textures. `--no-kexts` leaves them out, and the boot argument `-reimsvgpuoff`
-  turns the kext off. The apv-arm64-port kexts load after these, on macOS 26.4 and later, and
-  reims-vgpu-video's after those, on macOS 26.7 ([below](#the-kexts)). There are no others:
-  QEMU's `isa-applesmc` is the SMC.
+  turns the kext off. Kexts you add with `--add-kext` load after these
+  ([below](#adding-kexts)). There are no others: QEMU's `isa-applesmc` is the SMC.
 - **The drivers a VM boots with**: OpenRuntime, OpenHfsPlus (recovery images and installers are
   HFS+), OpenPartitionDxe (for older recovery images) and ResetNvramEntry.
 - **No boot picker**: OpenCore boots the default entry, the disk macOS last chose as its startup
@@ -107,6 +106,26 @@ What's in the image, and why:
 `--timeout` sets how long a shown picker waits (0 waits for you), `--boot-args` the kernel's boot
 arguments, and `--verbose-boot` shows the kernel's messages while it boots.
 `reims-util opencore --help` lists the rest.
+
+#### Adding kexts
+
+`--add-kext` puts a kext bundle of your own in the image, after Lilu and ReimsVgpu.kext. Repeat
+it for more: they load in the order you give them, so give a kext after the ones it links
+against.
+
+```sh
+reims-util opencore -o OpenCore.qcow2 \
+  --add-kext ~/kexts/Loader.kext,25.4.0,25.99.99 --add-kext ~/kexts/Plugin.kext,25.4.0
+```
+
+Each value is `PATH[,MIN[,MAX]]`: the bundle, then the Darwin versions it loads on, as OpenCore's
+MinKernel and MaxKernel take them (25.4.0 is macOS 26.4). Left out, they're 25.0.0 and 25.99.99,
+macOS 26, as for the image's own kexts. The bundle is copied whole into `EFI/OC/Kexts`, without
+its dotfiles, and OpenCore loads the executable its Info.plist names, or none for a kext with no
+code. reims-util refuses a kext with the name or bundle identifier of one already in the image
+(the image's FAT32 partition doesn't tell names apart by case), and one that links against a kext
+given after it, or against Lilu when `--no-kexts` leaves Lilu out. `--no-kexts` leaves out
+reims-util's own kexts alone: the ones you add still go in.
 
 ### Online installers
 
@@ -171,7 +190,8 @@ still boots, and a VM may be using it.
 
 `--json` prints progress and the result as JSON lines on stdout. The last line is either
 `{"event":"done","result":{…}}`, with what was written (and for `opencore`, the identity it
-made) or, for `list`, the versions, or `{"event":"error","message":"…"}`.
+made, and in `kexts` the bundles it carries, in the order they load) or, for `list`, the
+versions, or `{"event":"error","message":"…"}`.
 
 ```sh
 reims-util --json online-installer tahoe -o ~/vms/mac
@@ -179,26 +199,9 @@ reims-util --json online-installer tahoe -o ~/vms/mac
 
 ## The kexts
 
-`kext/` holds the kexts reims-util puts in its images, built: a kext builds on a Mac alone, while
-reims-util builds anywhere. Every image carries them by default, each set after the one before it:
-
-- **ReimsVgpu.kext**, with Lilu, on macOS 26 ([above](#opencore-and-ovmf)), built from its
-  source in `kext/`.
-- **The apv-arm64-port kexts**, on macOS 26.4 and later, which drive reims-vgpu's GPU with kexts
-  of their own; older macOS 26 builds keep macOS's own driver with ReimsVgpu.kext.
-  `--no-apv-arm64-port` makes an image without them.
-- **reims-vgpu-video's kexts**, on macOS 26.7, which drive the paravirtualized VideoToolbox
-  (106b:1a03) and M2 scaler (106b:1a0b) devices, when the VM's QEMU serves them:
-  AppleVideoToolboxParavirtualization.kext and AppleM2ScalerParavirtDriver.kext, Apple's arm64
-  guest drivers ported to x86-64, and VtWaitPatch.kext, a Lilu plugin that keeps the x86-64
-  VideoToolbox's waits for the host's replies from expiring at once on macOS 26.7.1 (25G241). The
-  two drivers link against apv-arm64-port's IOSurface mapper, so an image carries them only with
-  the apv-arm64-port kexts, from Darwin 25.6.0 on; a driver whose device the VM lacks loads and
-  matches nothing. `--no-video` makes an image without them. The two drivers are Apple's code,
-  ported, and are not for redistribution.
-
-After changing ReimsVgpu.kext's source, rebuild it on a Mac with Xcode, and commit the built kext
-with the change:
+`kext/` holds ReimsVgpu.kext, the kext reims-util puts in its images, built: a kext builds on a
+Mac alone, while reims-util builds anywhere. After changing its source, rebuild it on a Mac with
+Xcode, and commit the built kext with the change:
 
 ```sh
 cd kext

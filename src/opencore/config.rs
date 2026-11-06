@@ -13,9 +13,9 @@
 //!   when the VM has one, unless macOS's "Play sound on startup" is off (`StartupMute`);
 //! - on macOS 26, two kexts: Lilu, and its plugin ReimsVgpu (kext/), which has macOS's own driver
 //!   for reims-vgpu's GPU negotiate the interface version arm64 guests use, and patches what the
-//!   x86-64 driver and its Metal plugin hardcode; after them, the seven apv-arm64-port kexts
-//!   (apv_arm64_port.rs), on macOS 26.4 and later alone; after those, reims-vgpu-video's three
-//!   (video.rs), on macOS 26.7 alone; no others, as QEMU's `isa-applesmc` is the SMC;
+//!   x86-64 driver and its Metal plugin hardcode; after them, the kexts given with `--add-kext`
+//!   (added.rs), in their order and on the Darwin versions given; no others, as QEMU's
+//!   `isa-applesmc` is the SMC;
 //! - one ACPI table, the `EC` and `USBX` devices macOS looks for (acpi.rs);
 //! - CPUID leaf 1 reported as a Skylake-SP (family 6, model 85, stepping 4), a CPU every x86-64
 //!   macOS from 10.13 to 26 knows, whatever `-cpu` model the VM has;
@@ -26,7 +26,7 @@
 //! - the picker hidden, so OpenCore boots the default entry, unless asked to show it;
 //! - the SMBIOS identity (smbios.rs), and the picker's timeout and boot arguments.
 
-use super::apv_arm64_port::Kext as PortKext;
+use super::added;
 use super::smbios::Smbios;
 use anyhow::{Context, Result, bail};
 use plist::{Dictionary, Value};
@@ -48,34 +48,34 @@ pub fn drivers(o: &Options) -> Vec<&'static str> {
     d
 }
 
-/// A kext the image carries in `EFI/OC/Kexts`: its bundle, and the executable in its
-/// `Contents/MacOS`.
+/// A kext of reims-util's own in `EFI/OC/Kexts`: its bundle, its `CFBundleIdentifier`, and the
+/// executable in its `Contents/MacOS`.
 pub struct Kext {
     pub bundle: &'static str,
+    pub identifier: &'static str,
     pub executable: &'static str,
 }
 
 pub const LILU: Kext = Kext {
     bundle: "Lilu.kext",
+    identifier: "as.vit9696.Lilu",
     executable: "Lilu",
 };
 
 /// Lilu's plugin, built from kext/.
 pub const REIMS_VGPU: Kext = Kext {
     bundle: "ReimsVgpu.kext",
+    identifier: "com.steelbrain.ReimsVgpu",
     executable: "ReimsVgpu",
 };
 
-/// The kexts load on Darwin 25 alone, macOS 26, whose GPU driver ReimsVgpu patches.
-const KEXT_MIN_KERNEL: &str = "25.0.0";
-const KEXT_MAX_KERNEL: &str = "25.99.99";
-/// The apv-arm64-port kexts load from macOS 26.4 on: on older builds, ReimsVgpu has macOS's own
-/// driver take the GPU. Where the set refuses at boot, it leaves the GPU to that driver too.
-const PORT_MIN_KERNEL: &str = "25.4.0";
-/// reims-vgpu-video's kexts load on macOS 26.7 (Darwin 25.6) alone, the release whose kernel
-/// collections their links were checked against (its docs/kext-port.md), within the
-/// apv-arm64-port kexts' bounds, as two of them link against its mapper.
-const VIDEO_MIN_KERNEL: &str = "25.6.0";
+/// reims-util's kexts, in the order they load.
+pub const OWN: [Kext; 2] = [LILU, REIMS_VGPU];
+
+/// reims-util's kexts load on Darwin 25 alone, macOS 26, whose GPU driver ReimsVgpu patches; so
+/// does a kext added with no bounds of its own.
+pub const KEXT_MIN_KERNEL: &str = "25.0.0";
+pub const KEXT_MAX_KERNEL: &str = "25.99.99";
 
 /// Arguments for every boot: kernel symbols in panic logs, and no panics on a TLB shootdown or a
 /// timeout a vCPU took because the host descheduled it.
@@ -99,18 +99,13 @@ pub struct Options {
     pub graphical_picker: bool,
     /// The picker at every boot, or none: OpenCore boots the default entry.
     pub show_picker: bool,
-    /// Lilu and ReimsVgpu (and the set `make` is given), for macOS 26.
+    /// Lilu and ReimsVgpu, for macOS 26.
     pub kexts: bool,
 }
 
-/// The config.plist for `o`, from the release's `sample`. With `o.kexts`, `port`
-/// (apv_arm64_port.rs) loads after Lilu and ReimsVgpu, and `video` (video.rs) after `port`.
-pub fn make(
-    sample: &[u8],
-    o: &Options,
-    port: &[PortKext<'_>],
-    video: &[PortKext<'_>],
-) -> Result<Vec<u8>> {
+/// The config.plist for `o`, from the release's `sample`. `added` (added.rs) loads after Lilu and
+/// ReimsVgpu, or alone when `o.kexts` leaves them out.
+pub fn make(sample: &[u8], o: &Options, added: &[added::Kext]) -> Result<Vec<u8>> {
     let mut root: Value = plist::from_bytes(sample).context("read Sample.plist")?;
     let c = root
         .as_dictionary_mut()
@@ -154,11 +149,7 @@ pub fn make(
         Value::Dictionary(Dictionary::new()),
     )?;
 
-    let kexts = if o.kexts {
-        kernel_add(&template(c, &["Kernel", "Add"])?, port, video)
-    } else {
-        Vec::new()
-    };
+    let kexts = kernel_add(&template(c, &["Kernel", "Add"])?, o.kexts, added);
     set(c, &["Kernel"], "Add", Value::Array(kexts))?;
     set(c, &["Kernel"], "Block", Value::Array(vec![]))?;
     set(c, &["Kernel"], "Force", Value::Array(vec![]))?;
@@ -320,41 +311,37 @@ pub fn make(
     Ok(out)
 }
 
-/// Kernel > Add's entries, made from the sample's first: Lilu and ReimsVgpu for macOS 26, then
-/// `port` for macOS 26.4 and later, then `video` for macOS 26.7.
-fn kernel_add(template: &Dictionary, port: &[PortKext<'_>], video: &[PortKext<'_>]) -> Vec<Value> {
-    let mut add = vec![
-        (
+/// Kernel > Add's entries, made from the sample's first: with `own`, Lilu and ReimsVgpu for
+/// macOS 26, then `added`, in its order, on the Darwin versions each was given.
+fn kernel_add(template: &Dictionary, own: bool, added: &[added::Kext]) -> Vec<Value> {
+    let mut add = Vec::new();
+    if own {
+        add.push((
             LILU.bundle,
             Some(LILU.executable),
             KEXT_MIN_KERNEL,
-            "Patch engine".to_string(),
-        ),
-        (
+            KEXT_MAX_KERNEL,
+            "Patch engine",
+        ));
+        add.push((
             REIMS_VGPU.bundle,
             Some(REIMS_VGPU.executable),
             KEXT_MIN_KERNEL,
-            "reims-vgpu's GPU features on macOS 26".to_string(),
-        ),
-    ];
-    for k in port {
-        add.push((
-            k.bundle,
-            k.executable.as_deref(),
-            PORT_MIN_KERNEL,
-            format!("apv-arm64-port's {}", k.bundle.trim_end_matches(".kext")),
+            KEXT_MAX_KERNEL,
+            "reims-vgpu's GPU features on macOS 26",
         ));
     }
-    for k in video {
+    for k in added {
         add.push((
-            k.bundle,
+            &k.bundle,
             k.executable.as_deref(),
-            VIDEO_MIN_KERNEL,
-            format!("reims-vgpu-video's {}", k.bundle.trim_end_matches(".kext")),
+            &k.min_kernel,
+            &k.max_kernel,
+            &k.identifier,
         ));
     }
     add.into_iter()
-        .map(|(bundle, executable, min_kernel, comment)| {
+        .map(|(bundle, executable, min_kernel, max_kernel, comment)| {
             let mut e = template.clone();
             e.insert("Arch".into(), "x86_64".into());
             e.insert("BundlePath".into(), bundle.into());
@@ -363,7 +350,7 @@ fn kernel_add(template: &Dictionary, port: &[PortKext<'_>], video: &[PortKext<'_
             // A kext with no code has an empty path.
             let path = executable.map(|x| format!("Contents/MacOS/{x}"));
             e.insert("ExecutablePath".into(), path.unwrap_or_default().into());
-            e.insert("MaxKernel".into(), KEXT_MAX_KERNEL.into());
+            e.insert("MaxKernel".into(), max_kernel.into());
             e.insert("MinKernel".into(), min_kernel.into());
             e.insert("PlistPath".into(), "Contents/Info.plist".into());
             Value::Dictionary(e)
@@ -418,14 +405,24 @@ fn unhex(s: &str) -> Result<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::opencore::apv_arm64_port as port;
-    use crate::opencore::video;
 
     fn fields(v: &Value, keys: &[&str]) -> Vec<String> {
         let d = v.as_dictionary().unwrap();
         keys.iter()
             .map(|k| d.get(k).and_then(Value::as_string).unwrap().to_string())
             .collect()
+    }
+
+    fn added(bundle: &str, executable: Option<&str>, min: &str, max: &str) -> added::Kext {
+        let plist = added::tests::info(&format!("t.{bundle}"), executable, &[]);
+        let mut files: Vec<(&str, &[u8])> = vec![("Contents/Info.plist", &plist)];
+        let path = executable.map(|x| format!("Contents/MacOS/{x}"));
+        if let Some(p) = &path {
+            files.push((p, &[0xcf]));
+        }
+        let b = added::tests::Bundle::new(&format!("{bundle}.kext"), &files);
+        let s = added::parse(&format!("{},{min},{max}", b.path.display())).unwrap();
+        added::read(&s).unwrap()
     }
 
     #[test]
@@ -436,56 +433,78 @@ mod tests {
         let keys = [
             "BundlePath",
             "ExecutablePath",
+            "PlistPath",
             "MinKernel",
             "MaxKernel",
             "Arch",
         ];
-
-        // With none of the set in kext/, Lilu and ReimsVgpu alone.
-        let today = kernel_add(&template, &port::set(&[]).unwrap(), &[]);
-        let want = |b: &str, x: &str| {
-            [b, x, KEXT_MIN_KERNEL, KEXT_MAX_KERNEL, "x86_64"].map(str::to_string)
+        let want = |b: &str, x: &str, min: &str, max: &str| {
+            [b, x, "Contents/Info.plist", min, max, "x86_64"].map(str::to_string)
         };
-        assert_eq!(
-            today.iter().map(|e| fields(e, &keys)).collect::<Vec<_>>(),
-            [
-                want("Lilu.kext", "Contents/MacOS/Lilu"),
-                want("ReimsVgpu.kext", "Contents/MacOS/ReimsVgpu"),
-            ]
+        let entries = |own: bool, added: &[added::Kext]| -> Vec<[String; 6]> {
+            kernel_add(&template, own, added)
+                .iter()
+                .map(|e| {
+                    assert_eq!(e.as_dictionary().unwrap()["Enabled"], Value::Boolean(true));
+                    fields(e, &keys).try_into().unwrap()
+                })
+                .collect()
+        };
+        let lilu = want(
+            "Lilu.kext",
+            "Contents/MacOS/Lilu",
+            KEXT_MIN_KERNEL,
+            KEXT_MAX_KERNEL,
+        );
+        let reims = want(
+            "ReimsVgpu.kext",
+            "Contents/MacOS/ReimsVgpu",
+            KEXT_MIN_KERNEL,
+            KEXT_MAX_KERNEL,
         );
 
-        // With the set, it follows them in its order, from macOS 26.4; a kext with no code has
-        // no path.
-        let files = port::tests::fixture();
-        let set = port::set(&port::tests::refs(&files)).unwrap();
-        let all = kernel_add(&template, &set, &[]);
-        assert_eq!(all.len(), 9);
-        assert_eq!(all[..2], today[..]);
-        for (e, k) in all[2..].iter().zip(&set) {
-            let f = fields(e, &keys);
-            assert_eq!(f[0], k.bundle);
-            let x = k.executable.as_ref().map(|x| format!("Contents/MacOS/{x}"));
-            assert_eq!(f[1], x.unwrap_or_default());
-            assert_eq!(f[2..], [PORT_MIN_KERNEL, KEXT_MAX_KERNEL, "x86_64"]);
-            assert!(fields(e, &["Comment"])[0].starts_with("apv-arm64-port's "));
-        }
-        assert!(all.iter().any(|e| fields(e, &keys)[1].is_empty()));
+        // Lilu and ReimsVgpu alone, or nothing.
+        assert_eq!(entries(true, &[]), [lilu.clone(), reims.clone()]);
+        assert!(entries(false, &[]).is_empty());
 
-        // With reims-vgpu-video's kexts too, they follow the set in their order, from macOS 26.7.
-        let video_files = video::tests::fixture();
-        let video_set = video::set(&port::tests::refs(&video_files)).unwrap();
-        let with_video = kernel_add(&template, &set, &video_set);
-        assert_eq!(with_video.len(), 12);
-        assert_eq!(with_video[..9], all[..]);
-        for (e, k) in with_video[9..].iter().zip(&video_set) {
-            let f = fields(e, &keys);
-            assert_eq!(f[0], k.bundle);
-            assert_eq!(
-                f[1],
-                format!("Contents/MacOS/{}", k.bundle.trim_end_matches(".kext"))
-            );
-            assert_eq!(f[2..], [VIDEO_MIN_KERNEL, KEXT_MAX_KERNEL, "x86_64"]);
-            assert!(fields(e, &["Comment"])[0].starts_with("reims-vgpu-video's "));
-        }
+        // Added kexts follow, in their order, on their own bounds; one with no code has no path.
+        let set = [
+            added("Loader", Some("Loader"), "25.4.0", "25.99.99"),
+            added("Shim", None, "25.4.0", "25.6.0"),
+            added("Gfx", Some("ReimsGraphics"), "25.0.0", "25.99.99"),
+        ];
+        let tail = [
+            want("Loader.kext", "Contents/MacOS/Loader", "25.4.0", "25.99.99"),
+            want("Shim.kext", "", "25.4.0", "25.6.0"),
+            want(
+                "Gfx.kext",
+                "Contents/MacOS/ReimsGraphics",
+                "25.0.0",
+                "25.99.99",
+            ),
+        ];
+        let mut all = vec![lilu, reims];
+        all.extend(tail.clone());
+        assert_eq!(entries(true, &set), all);
+        assert_eq!(entries(false, &set), tail);
+        let e = &kernel_add(&template, true, &set)[2];
+        assert_eq!(fields(e, &["Comment"]), ["t.Loader"]);
+    }
+
+    /// ReimsVgpu's identifier here is the one its Info.plist gives.
+    #[test]
+    fn own_identifiers() {
+        let info: Dictionary = plist::from_bytes(include_bytes!(
+            "../../kext/ReimsVgpu.kext/Contents/Info.plist"
+        ))
+        .unwrap();
+        assert_eq!(
+            info["CFBundleIdentifier"].as_string(),
+            Some(REIMS_VGPU.identifier)
+        );
+        assert_eq!(
+            info["CFBundleExecutable"].as_string(),
+            Some(REIMS_VGPU.executable)
+        );
     }
 }
