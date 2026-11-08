@@ -19,7 +19,7 @@ OpenCorePkg's macserial (Copyright (c) 2018-2020 vit9696, Copyright (c) 2020
 Matis Schotte), so that file is also under OpenCorePkg's BSD-3-Clause license:
 LICENSES/BSD-3-Clause-OpenCorePkg.txt.
 
-What reims-util downloads and writes into images, such as OpenCore, Lilu and
-OVMF, is not part of the repository, and keeps its own license; OVMF's
-licenses are written beside OVMF_CODE.fd. The crates the build takes from crates.io keep
+What reims-util downloads and writes into images, such as OpenCore and OVMF,
+is not part of the repository, and keeps its own license; OVMF's licenses are
+written beside OVMF_CODE.fd. The crates the build takes from crates.io keep
 their own licenses too.

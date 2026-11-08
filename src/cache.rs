@@ -1,4 +1,4 @@
-//! Files fetched once and kept: the OpenCore release, OcBinaryData, Lilu and the OVMF package, each
+//! Files fetched once and kept: the OpenCore release, OcBinaryData and the OVMF package, each
 //! pinned to its SHA-256, under `$XDG_CACHE_HOME/reims-util` (`~/.cache/reims-util`).
 
 use crate::http::{self, Dest, Download, NoCheck};

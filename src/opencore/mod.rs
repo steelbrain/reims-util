@@ -1,8 +1,8 @@
 //! The OpenCore boot image: a 128 MiB GPT disk whose EFI system partition holds a pinned
 //! OpenCore release, the drivers and ACPI table a VM needs, the picker's icons and the boot chime
-//! from a pinned commit of OcBinaryData, a pinned Lilu release, the kexts given with `--add-kext`
-//! (added.rs), and a `config.plist` made for a q35 VM (config.rs) with an SMBIOS identity of its
-//! own (smbios.rs). OVMF goes beside it (ovmf.rs), where reims-ctl looks for it.
+//! from a pinned commit of OcBinaryData, the kexts given with `--add-kext` (added.rs), and a
+//! `config.plist` made for a q35 VM (config.rs) with an SMBIOS identity of its own (smbios.rs).
+//! OVMF goes beside it (ovmf.rs), where reims-ctl looks for it.
 
 pub mod acpi;
 pub mod added;
@@ -39,15 +39,6 @@ const RESOURCES_ROOT: &str = "OcBinaryData-32500d5e3313f11cad00351ba1c6f9a4aa6cb
 /// The boot chime, the image's only sound.
 const CHIME: &str = "Audio/OCEFIAudio_VoiceOver_Boot.mp3";
 
-/// Lilu, which kexts given with `--add-kext` may link against: reims-vgpu's guest kexts link
-/// against 1.7.2.
-const LILU_RELEASE: Pinned = Pinned {
-    name: "Lilu-1.7.2-RELEASE.zip",
-    url: "https://github.com/acidanthera/Lilu/releases/download/1.7.2/Lilu-1.7.2-RELEASE.zip",
-    sha256: "53967d7dcfaab01023a33df2e969a89522f13d6654a6a56ac4711b62dabf3ab8",
-    what: "Lilu 1.7.2",
-};
-
 /// The image's size: room for OpenCore (about 2 MiB of it here) and for what a person may add.
 const DISK_SIZE: u64 = 128 << 20;
 
@@ -55,7 +46,7 @@ const DISK_SIZE: u64 = 128 << 20;
 pub struct Options {
     pub output: PathBuf,
     pub config: config::Options,
-    /// Kexts to load after Lilu, in this order.
+    /// Kexts to load, in this order.
     pub add_kexts: Vec<added::Spec>,
     /// Where OVMF's files go, or None to write none.
     pub ovmf_dir: Option<PathBuf>,
@@ -79,26 +70,15 @@ pub fn build(o: &Options, r: &dyn Reporter) -> Result<Outputs> {
         .iter()
         .map(added::read)
         .collect::<Result<Vec<_>>>()?;
-    added::check(&config::OWN, o.config.kexts, &added)?;
+    added::check(&added)?;
     let zip_path = cache::fetch(&RELEASE, r)?;
     progress::check(r)?;
     let resources_path = cache::fetch(&RESOURCES, r)?;
     progress::check(r)?;
-    let lilu_path = if o.config.kexts {
-        let p = cache::fetch(&LILU_RELEASE, r)?;
-        progress::check(r)?;
-        Some(p)
-    } else {
-        None
-    };
     r.step(&format!("Building the OpenCore {VERSION} image"));
     let mut files = files(&zip_path, &o.config, &added)?;
     files.extend(resources(&resources_path, o.config.graphical_picker)?);
     let mut kext_names = Vec::new();
-    if let Some(p) = &lilu_path {
-        files.extend(kexts(p)?);
-        kext_names.extend(config::OWN.iter().map(|k| k.bundle.to_string()));
-    }
     for k in added {
         for (p, d) in k.files {
             files.push((format!("EFI/OC/Kexts/{}/{p}", k.bundle), d));
@@ -182,28 +162,6 @@ fn files(
     // The release's other folders, for what a person adds.
     for d in ["EFI/OC/Kexts/", "EFI/OC/Resources/", "EFI/OC/Tools/"] {
         files.push((d.to_string(), Vec::new()));
-    }
-    Ok(files)
-}
-
-/// Lilu's files, from its release.
-fn kexts(lilu_zip: &Path) -> Result<Vec<(String, Vec<u8>)>> {
-    use config::LILU;
-    let f =
-        std::fs::File::open(lilu_zip).with_context(|| format!("open {}", lilu_zip.display()))?;
-    let mut zip = zip::ZipArchive::new(f).context("read Lilu's release")?;
-    let mut files = Vec::new();
-    for p in [
-        "Contents/Info.plist".to_string(),
-        format!("Contents/MacOS/{}", LILU.executable),
-    ] {
-        let name = format!("{}/{p}", LILU.bundle);
-        let mut e = zip
-            .by_name(&name)
-            .with_context(|| format!("Lilu's release has no {name}"))?;
-        let mut v = Vec::new();
-        e.read_to_end(&mut v)?;
-        files.push((format!("EFI/OC/Kexts/{name}"), v));
     }
     Ok(files)
 }

@@ -63,9 +63,9 @@ reims-util opencore -o OpenCore.qcow2
 This writes a 128 MiB disk image with OpenCore 1.0.8 on its EFI partition: qcow2 for a `.qcow2`
 name, and a raw disk image for anything else (`.img`). Beside it go `OVMF_CODE.fd` and
 `OVMF_VARS.fd`, with OVMF's licenses. What goes in them is downloaded from pinned sources
-(OpenCore's release, a commit of its picker icons and boot chime, OcBinaryData, and Lilu's
-release, from GitHub; OVMF from Arch Linux's `edk2-ovmf` package), checked against the hashes
-reims-util knows, and cached in `~/.cache/reims-util`, so it's only downloaded once.
+(OpenCore's release and a commit of its picker icons and boot chime, OcBinaryData, from GitHub;
+OVMF from Arch Linux's `edk2-ovmf` package), checked against the hashes reims-util knows, and
+cached in `~/.cache/reims-util`, so it's only downloaded once.
 
 Each image gets a Mac identity of its own: a serial number, logic board serial (MLB), system UUID
 and ROM, which it prints when it's done. Keep them if you'll want the same identity in another
@@ -79,9 +79,8 @@ another with `--model`:
 
 What's in the image, and why:
 
-- **Lilu, which loads on macOS 26 alone**: kexts you add with `--add-kext` load after it
-  ([below](#adding-kexts)), and can link against it, as reims-vgpu's guest kexts do.
-  `--no-kexts` leaves it out. There are no other kexts: QEMU's `isa-applesmc` is the SMC.
+- **Only the kexts you add** with `--add-kext` ([below](#adding-kexts)), such as reims-vgpu's
+  guest kexts. There are no others: QEMU's `isa-applesmc` is the SMC.
 - **The drivers a VM boots with**: OpenRuntime, OpenHfsPlus (recovery images and installers are
   HFS+), OpenPartitionDxe (for older recovery images) and ResetNvramEntry.
 - **No boot picker**: OpenCore boots the default entry, the disk macOS last chose as its startup
@@ -104,8 +103,8 @@ arguments, and `--verbose-boot` shows the kernel's messages while it boots.
 
 #### Adding kexts
 
-`--add-kext` puts a kext bundle of your own in the image, after Lilu. Repeat it for more: they
-load in the order you give them, so give a kext after the ones it links against.
+`--add-kext` puts a kext bundle of your own in the image. Repeat it for more: they load in the
+order you give them, so give a kext after the ones it links against.
 
 ```sh
 reims-util opencore -o OpenCore.qcow2 \
@@ -114,12 +113,10 @@ reims-util opencore -o OpenCore.qcow2 \
 
 Each value is `PATH[,MIN[,MAX]]`: the bundle, then the Darwin versions it loads on, as OpenCore's
 MinKernel and MaxKernel take them (25.4.0 is macOS 26.4). Left out, they're 25.0.0 and 25.99.99,
-macOS 26, as for Lilu. The bundle is copied whole into `EFI/OC/Kexts`, without its dotfiles, and
-OpenCore loads the executable its Info.plist names, or none for a kext with no code. reims-util
-refuses a kext with the name or bundle identifier of one already in the image (the image's FAT32
-partition doesn't tell names apart by case), and one that links against a kext given after it, or
-against Lilu when `--no-kexts` leaves Lilu out. `--no-kexts` leaves out Lilu alone: the kexts you
-add still go in, so you can give a Lilu of your own, ahead of the kexts that link against it.
+macOS 26. The bundle is copied whole into `EFI/OC/Kexts`, without its dotfiles, and OpenCore loads
+the executable its Info.plist names, or none for a kext with no code. reims-util refuses a kext
+with the name or bundle identifier of one given before it (the image's FAT32 partition doesn't
+tell names apart by case), and one that links against a kext given after it.
 
 ### Online installers
 
@@ -199,5 +196,5 @@ reims-util --json online-installer tahoe -o ~/vms/mac
 
 reims-util is licensed under GPL-2.0-or-later OR LGPL-3.0-or-later; see [LICENSE](LICENSE). The
 serial number tables come from OpenCorePkg's macserial, under its BSD-3-Clause license.
-OpenCore, its picker icons and chime (OcBinaryData), Lilu and OVMF, which reims-util downloads,
-keep their own licenses.
+OpenCore, its picker icons and chime (OcBinaryData), and OVMF, which reims-util downloads, keep
+their own licenses.

@@ -108,12 +108,8 @@ pub struct OpencoreArgs {
     /// Show OpenCore's boot picker at every boot (by default OpenCore boots the default entry)
     #[arg(long)]
     pub show_picker: bool,
-    /// Leave out Lilu: the image carries only the kexts given with --add-kext, such as a Lilu of
-    /// your own, or none
-    #[arg(long)]
-    pub no_kexts: bool,
-    /// Add a kext bundle, loaded after Lilu on Darwin MIN to MAX (default 25.0.0 to 25.99.99,
-    /// macOS 26). Repeat it for more: they load in the order given
+    /// Add a kext bundle, loaded on Darwin MIN to MAX (default 25.0.0 to 25.99.99, macOS 26).
+    /// Repeat it for more: they load in the order given
     #[arg(long = "add-kext", value_name = "PATH[,MIN[,MAX]]", value_parser = added::parse)]
     pub add_kext: Vec<added::Spec>,
     /// Accepted and ignored: --no-apv-arm64-port and --no-video, whose kexts images no longer
@@ -361,7 +357,6 @@ pub fn opencore_options(a: &OpencoreArgs) -> Result<opencore::Options> {
             hide_vm: !a.show_vm,
             graphical_picker: !a.text_picker,
             show_picker: a.show_picker,
-            kexts: !a.no_kexts,
         },
         add_kexts: a.add_kext.clone(),
         ovmf_dir,

@@ -1,5 +1,5 @@
-//! Kexts given with `--add-kext`, which the image carries after its own, Lilu, in the order given:
-//! reims-vgpu's guest kexts for its own GPU device, for one. Each is a bundle on disk, copied
+//! Kexts given with `--add-kext`, which the image carries in the order given: reims-vgpu's guest
+//! kexts for its own GPU device, for one. Each is a bundle on disk, copied
 //! whole into `EFI/OC/Kexts` (dotfiles left out), and loaded by a Kernel > Add entry made from its
 //! Info.plist and the Darwin versions it was given (config.rs).
 
@@ -16,8 +16,8 @@ pub struct Spec {
 }
 
 /// Reads `PATH[,MIN[,MAX]]`. The path ends in `.kext`, so a comma in a folder's name stays in
-/// the path; MIN and MAX are versions as OpenCore takes them (25.4.0), each 25.0.0 and 25.99.99,
-/// the bounds of the image's own kexts, when left out or empty.
+/// the path; MIN and MAX are versions as OpenCore takes them (25.4.0), each 25.0.0 and 25.99.99
+/// (macOS 26) when left out or empty.
 pub fn parse(s: &str) -> Result<Spec, String> {
     let usage = "give PATH[,MIN[,MAX]], such as Foo.kext,25.4.0,25.99.99";
     let mut path = s;
@@ -174,29 +174,13 @@ fn walk(root: &Path, rel: &Path, files: &mut Vec<(String, Vec<u8>)>) -> Result<(
     Ok(())
 }
 
-/// Refuses `added` where it would clash with the image's own kexts, `own` (in the image when
-/// `own_in`), or with each other: a bundle name FAT32 can't tell from another's (it ignores
-/// case), an identifier already loaded, or a library of the image's that does not load before it.
-pub fn check(own: &[config::Kext], own_in: bool, added: &[Kext]) -> Result<()> {
-    let present: &[config::Kext] = if own_in { own } else { &[] };
+/// Refuses `added` where its kexts would clash with each other: a bundle name FAT32 can't tell
+/// from another's (it ignores case), an identifier given twice, or a kext given before one it
+/// links against.
+pub fn check(added: &[Kext]) -> Result<()> {
     for (i, k) in added.iter().enumerate() {
         let earlier = &added[..i];
         let same = |b: &str| b.eq_ignore_ascii_case(&k.bundle);
-        if let Some(o) = present.iter().find(|o| same(o.bundle)) {
-            bail!(
-                "the image carries its own {}: leave {} out of --add-kext",
-                o.bundle,
-                k.bundle
-            );
-        }
-        if let Some(o) = present.iter().find(|o| o.identifier == k.identifier) {
-            bail!(
-                "{} is {}, as the image's own {} is",
-                k.bundle,
-                k.identifier,
-                o.bundle
-            );
-        }
         if let Some(e) = earlier.iter().find(|e| same(&e.bundle)) {
             if e.bundle == k.bundle {
                 bail!("{} is given twice", k.bundle);
@@ -211,10 +195,7 @@ pub fn check(own: &[config::Kext], own_in: bool, added: &[Kext]) -> Result<()> {
             bail!("{} and {} are both {}", e.bundle, k.bundle, k.identifier);
         }
         for l in &k.libraries {
-            let before = *l == k.identifier
-                || present.iter().any(|o| o.identifier == *l)
-                || earlier.iter().any(|e| e.identifier == *l);
-            if before {
+            if *l == k.identifier || earlier.iter().any(|e| e.identifier == *l) {
                 continue;
             }
             if let Some(later) = added[i + 1..].iter().find(|a| a.identifier == *l) {
@@ -225,13 +206,6 @@ pub fn check(own: &[config::Kext], own_in: bool, added: &[Kext]) -> Result<()> {
                     later.bundle
                 );
             }
-            if let Some(o) = own.iter().find(|o| o.identifier == *l) {
-                bail!(
-                    "{} links against {} ({l}), which --no-kexts leaves out",
-                    k.bundle,
-                    o.bundle
-                );
-            }
         }
     }
     Ok(())
@@ -240,7 +214,6 @@ pub fn check(own: &[config::Kext], own_in: bool, added: &[Kext]) -> Result<()> {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
-    use crate::opencore::config::LILU;
 
     fn spec(path: &str, min: &str, max: &str) -> Spec {
         Spec {
@@ -357,7 +330,7 @@ pub(crate) mod tests {
 
     #[test]
     fn read_with_code() {
-        let plist = info("t.loader", Some("Loader"), &["as.vit9696.Lilu"]);
+        let plist = info("t.loader", Some("Loader"), &["com.apple.kpi.libkern"]);
         let b = Bundle::new(
             "Loader.kext",
             &[
@@ -373,7 +346,7 @@ pub(crate) mod tests {
         assert_eq!(k.bundle, "Loader.kext");
         assert_eq!(k.identifier, "t.loader");
         assert_eq!(k.executable.as_deref(), Some("Loader"));
-        assert_eq!(k.libraries, ["as.vit9696.Lilu"]);
+        assert_eq!(k.libraries, ["com.apple.kpi.libkern"]);
         assert_eq!(
             (k.min_kernel.as_str(), k.max_kernel.as_str()),
             ("25.4.0", config::KEXT_MAX_KERNEL)
@@ -431,68 +404,34 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn checked_against_the_image() {
-        let own = [LILU];
+    fn checked() {
         let ok = [
-            kext("Loader.kext", "t.loader", &["as.vit9696.Lilu"]),
+            kext("Loader.kext", "t.loader", &["com.apple.kpi.libkern"]),
             kext("Shim.kext", "t.shim", &["com.apple.kpi.iokit"]),
             kext("Gfx.kext", "t.gfx", &["t.shim", "t.loader", "t.gfx"]),
         ];
-        check(&own, true, &ok).unwrap();
-        check(&own, true, &[]).unwrap();
-        check(&own, false, &[]).unwrap();
+        check(&ok).unwrap();
+        check(&[]).unwrap();
 
-        let refused = |own_in: bool, added: &[Kext], says: &str| {
-            let e = check(&own, own_in, added).unwrap_err().to_string();
+        let refused = |added: &[Kext], says: &str| {
+            let e = check(added).unwrap_err().to_string();
             assert!(e.contains(says), "{says}: {e}");
         };
         refused(
-            true,
-            &[kext("Lilu.kext", "t.other", &[])],
-            "carries its own Lilu.kext: leave Lilu.kext out",
-        );
-        refused(
-            true,
-            &[kext("lilu.KEXT", "t.other", &[])],
-            "carries its own Lilu.kext: leave lilu.KEXT out",
-        );
-        refused(
-            true,
-            &[kext("L.kext", "as.vit9696.Lilu", &[])],
-            "L.kext is as.vit9696.Lilu, as the image's own Lilu.kext is",
-        );
-        refused(
-            true,
             &[kext("A.kext", "t.a", &[]), kext("A.kext", "t.b", &[])],
             "A.kext is given twice",
         );
         refused(
-            true,
             &[kext("A.kext", "t.a", &[]), kext("a.kext", "t.b", &[])],
             "A.kext and a.kext are one name",
         );
         refused(
-            true,
             &[kext("A.kext", "t.a", &[]), kext("B.kext", "t.a", &[])],
             "A.kext and B.kext are both t.a",
         );
         refused(
-            true,
             &[kext("A.kext", "t.a", &["t.b"]), kext("B.kext", "t.b", &[])],
             "A.kext links against B.kext (t.b), which comes after it: give B.kext first",
         );
-        refused(
-            false,
-            &[kext("Loader.kext", "t.loader", &["as.vit9696.Lilu"])],
-            "Loader.kext links against Lilu.kext (as.vit9696.Lilu), which --no-kexts leaves out",
-        );
-
-        // With --no-kexts, a Lilu of one's own goes in, ahead of its plugins.
-        let own_lilu = [
-            kext("Lilu.kext", "as.vit9696.Lilu", &[]),
-            kext("Loader.kext", "t.loader", &["as.vit9696.Lilu"]),
-        ];
-        check(&own, false, &own_lilu).unwrap();
-        refused(true, &own_lilu, "carries its own Lilu.kext");
     }
 }

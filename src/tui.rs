@@ -272,7 +272,6 @@ impl App {
                     show_vm: !form.toggle(5),
                     text_picker: !form.toggle(7),
                     show_picker: form.toggle(8),
-                    no_kexts: false,
                     add_kext: Vec::new(),
                     _retired: 0,
                     no_ovmf: !form.toggle(3),

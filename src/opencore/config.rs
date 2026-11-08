@@ -11,9 +11,8 @@
 //!   picker, when asked for);
 //! - the boot chime, which AudioDxe plays on the first Intel HDA controller and codec it finds,
 //!   when the VM has one, unless macOS's "Play sound on startup" is off (`StartupMute`);
-//! - on macOS 26, one kext, Lilu, which kexts given with `--add-kext` may link against; after it,
-//!   those kexts (added.rs), in their order and on the Darwin versions given; no others, as QEMU's
-//!   `isa-applesmc` is the SMC;
+//! - the kexts given with `--add-kext` (added.rs), in their order and on the Darwin versions
+//!   given; no others, as QEMU's `isa-applesmc` is the SMC;
 //! - one ACPI table, the `EC` and `USBX` devices macOS looks for (acpi.rs);
 //! - CPUID leaf 1 reported as a Skylake-SP (family 6, model 85, stepping 4), a CPU every x86-64
 //!   macOS from 10.13 to 26 knows, whatever `-cpu` model the VM has;
@@ -46,25 +45,7 @@ pub fn drivers(o: &Options) -> Vec<&'static str> {
     d
 }
 
-/// A kext of reims-util's own in `EFI/OC/Kexts`: its bundle, its `CFBundleIdentifier`, and the
-/// executable in its `Contents/MacOS`.
-pub struct Kext {
-    pub bundle: &'static str,
-    pub identifier: &'static str,
-    pub executable: &'static str,
-}
-
-pub const LILU: Kext = Kext {
-    bundle: "Lilu.kext",
-    identifier: "as.vit9696.Lilu",
-    executable: "Lilu",
-};
-
-/// reims-util's kexts, in the order they load.
-pub const OWN: [Kext; 1] = [LILU];
-
-/// reims-util's kexts load on Darwin 25 alone, macOS 26; so does a kext added with no bounds of
-/// its own.
+/// A kext added with no bounds of its own loads on Darwin 25 alone, macOS 26.
 pub const KEXT_MIN_KERNEL: &str = "25.0.0";
 pub const KEXT_MAX_KERNEL: &str = "25.99.99";
 
@@ -90,12 +71,9 @@ pub struct Options {
     pub graphical_picker: bool,
     /// The picker at every boot, or none: OpenCore boots the default entry.
     pub show_picker: bool,
-    /// Lilu, for macOS 26.
-    pub kexts: bool,
 }
 
-/// The config.plist for `o`, from the release's `sample`. `added` (added.rs) loads after Lilu, or
-/// alone when `o.kexts` leaves Lilu out.
+/// The config.plist for `o`, from the release's `sample`, loading the kexts `added` (added.rs).
 pub fn make(sample: &[u8], o: &Options, added: &[added::Kext]) -> Result<Vec<u8>> {
     let mut root: Value = plist::from_bytes(sample).context("read Sample.plist")?;
     let c = root
@@ -140,7 +118,7 @@ pub fn make(sample: &[u8], o: &Options, added: &[added::Kext]) -> Result<Vec<u8>
         Value::Dictionary(Dictionary::new()),
     )?;
 
-    let kexts = kernel_add(&template(c, &["Kernel", "Add"])?, o.kexts, added);
+    let kexts = kernel_add(&template(c, &["Kernel", "Add"])?, added);
     set(c, &["Kernel"], "Add", Value::Array(kexts))?;
     set(c, &["Kernel"], "Block", Value::Array(vec![]))?;
     set(c, &["Kernel"], "Force", Value::Array(vec![]))?;
@@ -302,40 +280,22 @@ pub fn make(sample: &[u8], o: &Options, added: &[added::Kext]) -> Result<Vec<u8>
     Ok(out)
 }
 
-/// Kernel > Add's entries, made from the sample's first: with `own`, Lilu for macOS 26, then
-/// `added`, in its order, on the Darwin versions each was given.
-fn kernel_add(template: &Dictionary, own: bool, added: &[added::Kext]) -> Vec<Value> {
-    let mut add = Vec::new();
-    if own {
-        add.push((
-            LILU.bundle,
-            Some(LILU.executable),
-            KEXT_MIN_KERNEL,
-            KEXT_MAX_KERNEL,
-            "Patch engine",
-        ));
-    }
-    for k in added {
-        add.push((
-            &k.bundle,
-            k.executable.as_deref(),
-            &k.min_kernel,
-            &k.max_kernel,
-            &k.identifier,
-        ));
-    }
-    add.into_iter()
-        .map(|(bundle, executable, min_kernel, max_kernel, comment)| {
+/// Kernel > Add's entries, made from the sample's first: `added`, in its order, on the Darwin
+/// versions each was given.
+fn kernel_add(template: &Dictionary, added: &[added::Kext]) -> Vec<Value> {
+    added
+        .iter()
+        .map(|k| {
             let mut e = template.clone();
             e.insert("Arch".into(), "x86_64".into());
-            e.insert("BundlePath".into(), bundle.into());
-            e.insert("Comment".into(), comment.into());
+            e.insert("BundlePath".into(), k.bundle.as_str().into());
+            e.insert("Comment".into(), k.identifier.as_str().into());
             e.insert("Enabled".into(), true.into());
             // A kext with no code has an empty path.
-            let path = executable.map(|x| format!("Contents/MacOS/{x}"));
+            let path = k.executable.as_ref().map(|x| format!("Contents/MacOS/{x}"));
             e.insert("ExecutablePath".into(), path.unwrap_or_default().into());
-            e.insert("MaxKernel".into(), max_kernel.into());
-            e.insert("MinKernel".into(), min_kernel.into());
+            e.insert("MaxKernel".into(), k.max_kernel.as_str().into());
+            e.insert("MinKernel".into(), k.min_kernel.as_str().into());
             e.insert("PlistPath".into(), "Contents/Info.plist".into());
             Value::Dictionary(e)
         })
@@ -412,7 +372,7 @@ mod tests {
     #[test]
     fn kernel_add_entries() {
         let mut template = Dictionary::new();
-        template.insert("BundlePath".into(), "Lilu.kext".into());
+        template.insert("BundlePath".into(), "Sample.kext".into());
         template.insert("Enabled".into(), false.into());
         let keys = [
             "BundlePath",
@@ -425,8 +385,8 @@ mod tests {
         let want = |b: &str, x: &str, min: &str, max: &str| {
             [b, x, "Contents/Info.plist", min, max, "x86_64"].map(str::to_string)
         };
-        let entries = |own: bool, added: &[added::Kext]| -> Vec<[String; 6]> {
-            kernel_add(&template, own, added)
+        let entries = |added: &[added::Kext]| -> Vec<[String; 6]> {
+            kernel_add(&template, added)
                 .iter()
                 .map(|e| {
                     assert_eq!(e.as_dictionary().unwrap()["Enabled"], Value::Boolean(true));
@@ -434,24 +394,16 @@ mod tests {
                 })
                 .collect()
         };
-        let lilu = want(
-            "Lilu.kext",
-            "Contents/MacOS/Lilu",
-            KEXT_MIN_KERNEL,
-            KEXT_MAX_KERNEL,
-        );
+        // No kexts, no entries: the sample's own go.
+        assert!(entries(&[]).is_empty());
 
-        // Lilu alone, or nothing.
-        assert_eq!(entries(true, &[]), std::slice::from_ref(&lilu));
-        assert!(entries(false, &[]).is_empty());
-
-        // Added kexts follow, in their order, on their own bounds; one with no code has no path.
+        // Added kexts, in their order, on their own bounds; one with no code has no path.
         let set = [
             added("Loader", Some("Loader"), "25.4.0", "25.99.99"),
             added("Shim", None, "25.4.0", "25.6.0"),
             added("Gfx", Some("ReimsGraphics"), "25.0.0", "25.99.99"),
         ];
-        let tail = [
+        let want_set = [
             want("Loader.kext", "Contents/MacOS/Loader", "25.4.0", "25.99.99"),
             want("Shim.kext", "", "25.4.0", "25.6.0"),
             want(
@@ -461,11 +413,8 @@ mod tests {
                 "25.99.99",
             ),
         ];
-        let mut all = vec![lilu];
-        all.extend(tail.clone());
-        assert_eq!(entries(true, &set), all);
-        assert_eq!(entries(false, &set), tail);
-        let e = &kernel_add(&template, true, &set)[1];
+        assert_eq!(entries(&set), want_set);
+        let e = &kernel_add(&template, &set)[0];
         assert_eq!(fields(e, &["Comment"]), ["t.Loader"]);
     }
 }
