@@ -108,7 +108,7 @@ pub struct OpencoreArgs {
     /// Show OpenCore's boot picker at every boot (by default OpenCore boots the default entry)
     #[arg(long)]
     pub show_picker: bool,
-    /// Add a kext bundle, loaded on Darwin MIN to MAX (default 25.0.0 to 25.99.99, macOS 26).
+    /// Add a kext bundle, loaded on Darwin MIN to MAX, with no bound where one is left out.
     /// Repeat it for more: they load in the order given
     #[arg(long = "add-kext", value_name = "PATH[,MIN[,MAX]]", value_parser = added::parse)]
     pub add_kext: Vec<added::Spec>,

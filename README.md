@@ -108,15 +108,16 @@ order you give them, so give a kext after the ones it links against.
 
 ```sh
 reims-util opencore -o OpenCore.qcow2 \
-  --add-kext ~/kexts/Loader.kext,25.4.0,25.99.99 --add-kext ~/kexts/Plugin.kext,25.4.0
+  --add-kext ~/kexts/Loader.kext --add-kext ~/kexts/Plugin.kext,25.4.0
 ```
 
 Each value is `PATH[,MIN[,MAX]]`: the bundle, then the Darwin versions it loads on, as OpenCore's
-MinKernel and MaxKernel take them (25.4.0 is macOS 26.4). Left out, they're 25.0.0 and 25.99.99,
-macOS 26. The bundle is copied whole into `EFI/OC/Kexts`, without its dotfiles, and OpenCore loads
-the executable its Info.plist names, or none for a kext with no code. reims-util refuses a kext
-with the name or bundle identifier of one given before it (the image's FAT32 partition doesn't
-tell names apart by case), and one that links against a kext given after it.
+MinKernel and MaxKernel take them (25.4.0 is macOS 26.4). A version left out is no bound, so
+Loader.kext above loads on every macOS, and Plugin.kext on macOS 26.4 and later. The bundle is
+copied whole into `EFI/OC/Kexts`, without its dotfiles, and OpenCore loads the executable its
+Info.plist names, or none for a kext with no code. reims-util refuses a kext with the name or
+bundle identifier of one given before it (the image's FAT32 partition doesn't tell names apart by
+case), and one that links against a kext given after it.
 
 ### Online installers
 

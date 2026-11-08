@@ -3,11 +3,11 @@
 //! whole into `EFI/OC/Kexts` (dotfiles left out), and loaded by a Kernel > Add entry made from its
 //! Info.plist and the Darwin versions it was given (config.rs).
 
-use super::config;
 use anyhow::{Context, Result, bail};
 use std::path::{Path, PathBuf};
 
-/// A `--add-kext` value, `PATH[,MIN[,MAX]]`: a bundle, and the Darwin versions it loads on.
+/// A `--add-kext` value, `PATH[,MIN[,MAX]]`: a bundle, and the Darwin versions it loads on, each
+/// bound empty for none.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Spec {
     pub path: PathBuf,
@@ -16,8 +16,8 @@ pub struct Spec {
 }
 
 /// Reads `PATH[,MIN[,MAX]]`. The path ends in `.kext`, so a comma in a folder's name stays in
-/// the path; MIN and MAX are versions as OpenCore takes them (25.4.0), each 25.0.0 and 25.99.99
-/// (macOS 26) when left out or empty.
+/// the path; MIN and MAX are versions as OpenCore takes them (25.4.0), and one left out or empty
+/// is no bound, as OpenCore takes an empty MinKernel or MaxKernel.
 pub fn parse(s: &str) -> Result<Spec, String> {
     let usage = "give PATH[,MIN[,MAX]], such as Foo.kext,25.4.0,25.99.99";
     let mut path = s;
@@ -32,18 +32,20 @@ pub fn parse(s: &str) -> Result<Spec, String> {
     if !is_bundle(path) {
         return Err(format!("{s:?} is not a .kext bundle: {usage}"));
     }
-    let bound = |i: usize, default: &str| -> Result<String, String> {
+    let bound = |i: usize| -> Result<String, String> {
         match bounds.get(i).map(|b| b.trim()).filter(|b| !b.is_empty()) {
-            None => Ok(default.to_string()),
+            None => Ok(String::new()),
             Some(b) if version(b).is_some() => Ok(b.to_string()),
             Some(b) => Err(format!(
                 "{b:?} is not a Darwin version such as 25.4.0: {usage}"
             )),
         }
     };
-    let min_kernel = bound(0, config::KEXT_MIN_KERNEL)?;
-    let max_kernel = bound(1, config::KEXT_MAX_KERNEL)?;
-    if version(&min_kernel) > version(&max_kernel) {
+    let min_kernel = bound(0)?;
+    let max_kernel = bound(1)?;
+    if let (Some(lo), Some(hi)) = (version(&min_kernel), version(&max_kernel))
+        && lo > hi
+    {
         return Err(format!(
             "{s:?} loads on no Darwin version: {min_kernel} is past {max_kernel}"
         ));
@@ -225,7 +227,7 @@ pub(crate) mod tests {
 
     #[test]
     fn parsed() {
-        let (lo, hi) = (config::KEXT_MIN_KERNEL, config::KEXT_MAX_KERNEL);
+        let (lo, hi) = ("", "");
         for (s, want) in [
             ("Foo.kext", spec("Foo.kext", lo, hi)),
             ("/k/Foo.kext/", spec("/k/Foo.kext/", lo, hi)),
@@ -242,6 +244,7 @@ pub(crate) mod tests {
                 spec("/a,b/Foo.kext", "25.4.0", "25.99.99"),
             ),
             ("Foo.kext,9.0.0", spec("Foo.kext", "9.0.0", hi)),
+            ("Foo.kext,26.0.0", spec("Foo.kext", "26.0.0", hi)),
         ] {
             assert_eq!(parse(s), Ok(want), "{s}");
         }
@@ -257,7 +260,6 @@ pub(crate) mod tests {
             ("Foo.kext,25.x.0", "not a Darwin version"),
             ("Foo.kext,+25.4.0", "not a Darwin version"),
             ("Foo.kext,25.6.0,25.4.0", "past 25.4.0"),
-            ("Foo.kext,26.0.0", "past 25.99.99"),
         ] {
             let e = parse(s).unwrap_err();
             assert!(e.contains(says), "{s}: {e}");
@@ -322,8 +324,8 @@ pub(crate) mod tests {
             identifier: id.into(),
             executable: None,
             libraries: libraries.iter().map(|l| l.to_string()).collect(),
-            min_kernel: config::KEXT_MIN_KERNEL.into(),
-            max_kernel: config::KEXT_MAX_KERNEL.into(),
+            min_kernel: String::new(),
+            max_kernel: String::new(),
             files: Vec::new(),
         }
     }
@@ -349,7 +351,7 @@ pub(crate) mod tests {
         assert_eq!(k.libraries, ["com.apple.kpi.libkern"]);
         assert_eq!(
             (k.min_kernel.as_str(), k.max_kernel.as_str()),
-            ("25.4.0", config::KEXT_MAX_KERNEL)
+            ("25.4.0", "")
         );
         let paths: Vec<&str> = k.files.iter().map(|(p, _)| p.as_str()).collect();
         assert_eq!(

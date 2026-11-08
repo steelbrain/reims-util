@@ -12,7 +12,7 @@
 //! - the boot chime, which AudioDxe plays on the first Intel HDA controller and codec it finds,
 //!   when the VM has one, unless macOS's "Play sound on startup" is off (`StartupMute`);
 //! - the kexts given with `--add-kext` (added.rs), in their order and on the Darwin versions
-//!   given; no others, as QEMU's `isa-applesmc` is the SMC;
+//!   given, or on every one; no others, as QEMU's `isa-applesmc` is the SMC;
 //! - one ACPI table, the `EC` and `USBX` devices macOS looks for (acpi.rs);
 //! - CPUID leaf 1 reported as a Skylake-SP (family 6, model 85, stepping 4), a CPU every x86-64
 //!   macOS from 10.13 to 26 knows, whatever `-cpu` model the VM has;
@@ -44,10 +44,6 @@ pub fn drivers(o: &Options) -> Vec<&'static str> {
     ]);
     d
 }
-
-/// A kext added with no bounds of its own loads on Darwin 25 alone, macOS 26.
-pub const KEXT_MIN_KERNEL: &str = "25.0.0";
-pub const KEXT_MAX_KERNEL: &str = "25.99.99";
 
 /// Arguments for every boot: kernel symbols in panic logs, and no panics on a TLB shootdown or a
 /// timeout a vCPU took because the host descheduled it.
@@ -281,7 +277,7 @@ pub fn make(sample: &[u8], o: &Options, added: &[added::Kext]) -> Result<Vec<u8>
 }
 
 /// Kernel > Add's entries, made from the sample's first: `added`, in its order, on the Darwin
-/// versions each was given.
+/// versions each was given (an empty bound is none).
 fn kernel_add(template: &Dictionary, added: &[added::Kext]) -> Vec<Value> {
     added
         .iter()
