@@ -508,7 +508,12 @@ fn install_script(inst: &Installer) -> String {
 # startosinstall, which restarts the VM into the installer.
 
 set -e
-here=$(cd "$(dirname "$0")" && pwd)
+# This script's directory, without dirname, which the Recovery of macOS 11 and 12 lacks.
+case $0 in
+    */*) here=${{0%/*}} ;;
+    *) here=. ;;
+esac
+here=$(cd "$here" && pwd)
 target=${{1:-}}
 if [ -z "$target" ]; then
     # Disk Utility names an erased disk Untitled unless told otherwise.
@@ -535,13 +540,28 @@ trap 'rm -f "$link"' EXIT
 
 echo "Installing the Install macOS app onto $target, which takes a few minutes"
 # CM_BUILD as mist-cli sets it, installing the package anywhere but /.
-CM_BUILD=CM_BUILD installer -pkg "$here/InstallAssistant.pkg" -target "$target"
+status=0
+CM_BUILD=CM_BUILD installer -pkg "$here/InstallAssistant.pkg" -target "$target" || status=$?
 app=
 for a in "$target"/Applications/Install\ macOS*.app; do
     if [ -d "$a" ]; then app=$a; fi
 done
-if [ -z "$app" ] || [ ! -f "$app/Contents/SharedSupport/SharedSupport.dmg" ]; then
-    echo "The package left no complete Install macOS app in $target/Applications" >&2
+if [ -z "$app" ] || [ ! -f "$app/Contents/Resources/startosinstall" ]; then
+    echo "The package left no Install macOS app in $target/Applications" >&2
+    exit 1
+fi
+shared="$app/Contents/SharedSupport"
+if [ ! -f "$shared/SharedSupport.dmg" ]; then
+    # The package placed the app, and its postinstall did not copy the package into it, as
+    # SharedSupport.dmg: Big Sur's runs with zsh, which Big Sur's Recovery lacks. Do the copy
+    # as the postinstall does, from another device.
+    echo "The package's postinstall did not finish (installer's status $status): copying the package into the app"
+    mkdir -p "$shared"
+    chmod 0755 "$shared"
+    cp "$here/InstallAssistant.pkg" "$shared/SharedSupport.dmg"
+    chflags -h norestricted "$shared/SharedSupport.dmg" 2>/dev/null || true
+elif [ "$status" != 0 ]; then
+    echo "installer failed (status $status)" >&2
     exit 1
 fi
 rm -f "$link"
@@ -594,6 +614,109 @@ mod tests {
             .unwrap();
         std::io::Write::write_all(&mut sh.stdin.take().unwrap(), script.as_bytes()).unwrap();
         assert!(sh.wait().unwrap().success());
+    }
+
+    /// The script runs in a Recovery with no dirname and no zsh, by its path or by its name from
+    /// its own directory: where the package's postinstall copies the package into the app (as
+    /// macOS 12's and 26's do, through `<target>Applications`), and where it fails after placing
+    /// the app (as Big Sur's does, needing zsh), the app gets the package as SharedSupport.dmg
+    /// and the script starts its startosinstall on the volume.
+    #[test]
+    fn install_script_runs_without_dirname_or_zsh() {
+        use std::os::unix::fs::{PermissionsExt, symlink};
+        let i = Installer {
+            product: "001-00001".into(),
+            title: "macOS Big Sur".into(),
+            version: "11.7.10".into(),
+            build: "20G1427".into(),
+            posted: "2023-09-21".into(),
+            size: 0,
+            url: String::new(),
+            integrity_url: None,
+            digest: None,
+        };
+        // The tools the script and the fake installer run, and no others.
+        let tools = ["mkdir", "ln", "rm", "chmod", "cp", "ls", "cat"];
+        let tool = |t: &str| {
+            ["/bin", "/usr/bin"]
+                .iter()
+                .map(|d| Path::new(d).join(t))
+                .find(|p| p.is_file())
+                .unwrap_or_else(|| panic!("no {t}"))
+        };
+        // The fake installer places the app; with POSTINSTALL=ok it then copies the package as
+        // the postinstall does, through "$3Applications", and with POSTINSTALL=zsh it fails as
+        // Big Sur's does in a Recovery without zsh.
+        let installer = r#"#!/bin/sh
+pkg=$2 target=$4
+app="$target/Applications/Install macOS Big Sur.app"
+mkdir -p "$app/Contents/Resources"
+printf '#!/bin/sh\necho "$@" > "%s/started"\n' "$target" > "$app/Contents/Resources/startosinstall"
+chmod 755 "$app/Contents/Resources/startosinstall"
+if [ "$POSTINSTALL" = ok ]; then
+    ss="${target}Applications/Install macOS Big Sur.app/Contents/SharedSupport"
+    mkdir -p "$ss" && cp "$pkg" "$ss/SharedSupport.dmg"
+    exit 0
+fi
+echo "Couldn't posix_spawn: error 2" >&2
+exit 1
+"#;
+        for (n, (postinstall, by_name)) in [("ok", false), ("zsh", false), ("zsh", true)]
+            .into_iter()
+            .enumerate()
+        {
+            let root = std::env::temp_dir().join(format!(
+                "reims-util-test-install-{}-{n}",
+                std::process::id()
+            ));
+            let _ = std::fs::remove_dir_all(&root);
+            let (bin, here, vol) = (
+                root.join("bin"),
+                root.join("Installer"),
+                root.join("Untitled"),
+            );
+            for d in [&bin, &here, &vol] {
+                std::fs::create_dir_all(d).unwrap();
+            }
+            for t in tools {
+                symlink(tool(t), bin.join(t)).unwrap();
+            }
+            std::fs::write(bin.join("installer"), installer).unwrap();
+            std::fs::set_permissions(
+                bin.join("installer"),
+                std::fs::Permissions::from_mode(0o755),
+            )
+            .unwrap();
+            std::fs::write(here.join("install-macos.sh"), install_script(&i)).unwrap();
+            std::fs::write(here.join(PACKAGE), "the package").unwrap();
+            let mut sh = std::process::Command::new("/bin/sh");
+            if by_name {
+                sh.arg("install-macos.sh").current_dir(&here);
+            } else {
+                sh.arg(here.join("install-macos.sh")).current_dir(&root);
+            }
+            let out = sh
+                .arg(&vol)
+                .env_clear()
+                .env("PATH", &bin)
+                .env("POSTINSTALL", postinstall)
+                .output()
+                .unwrap();
+            let app = vol.join("Applications/Install macOS Big Sur.app");
+            let dmg = std::fs::read_to_string(app.join("Contents/SharedSupport/SharedSupport.dmg"));
+            let started = std::fs::read_to_string(vol.join("started"));
+            let link_left = root.join("UntitledApplications").symlink_metadata().is_ok();
+            let _ = std::fs::remove_dir_all(&root);
+            let case = format!("{postinstall}, by name {by_name}: {out:?}");
+            assert!(out.status.success(), "{case}");
+            assert_eq!(dmg.ok().as_deref(), Some("the package"), "{case}");
+            assert_eq!(
+                started.ok().as_deref().map(str::trim),
+                Some(format!("--agreetolicense --volume {}", vol.display()).as_str()),
+                "{case}"
+            );
+            assert!(!link_left, "{case}");
+        }
     }
 
     #[test]
