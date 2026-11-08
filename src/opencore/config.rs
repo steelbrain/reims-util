@@ -11,10 +11,8 @@
 //!   picker, when asked for);
 //! - the boot chime, which AudioDxe plays on the first Intel HDA controller and codec it finds,
 //!   when the VM has one, unless macOS's "Play sound on startup" is off (`StartupMute`);
-//! - on macOS 26, two kexts: Lilu, and its plugin ReimsVgpu (kext/), which has macOS's own driver
-//!   for reims-vgpu's GPU negotiate the interface version arm64 guests use, and patches what the
-//!   x86-64 driver and its Metal plugin hardcode; after them, the kexts given with `--add-kext`
-//!   (added.rs), in their order and on the Darwin versions given; no others, as QEMU's
+//! - on macOS 26, one kext, Lilu, which kexts given with `--add-kext` may link against; after it,
+//!   those kexts (added.rs), in their order and on the Darwin versions given; no others, as QEMU's
 //!   `isa-applesmc` is the SMC;
 //! - one ACPI table, the `EC` and `USBX` devices macOS looks for (acpi.rs);
 //! - CPUID leaf 1 reported as a Skylake-SP (family 6, model 85, stepping 4), a CPU every x86-64
@@ -62,18 +60,11 @@ pub const LILU: Kext = Kext {
     executable: "Lilu",
 };
 
-/// Lilu's plugin, built from kext/.
-pub const REIMS_VGPU: Kext = Kext {
-    bundle: "ReimsVgpu.kext",
-    identifier: "com.steelbrain.ReimsVgpu",
-    executable: "ReimsVgpu",
-};
-
 /// reims-util's kexts, in the order they load.
-pub const OWN: [Kext; 2] = [LILU, REIMS_VGPU];
+pub const OWN: [Kext; 1] = [LILU];
 
-/// reims-util's kexts load on Darwin 25 alone, macOS 26, whose GPU driver ReimsVgpu patches; so
-/// does a kext added with no bounds of its own.
+/// reims-util's kexts load on Darwin 25 alone, macOS 26; so does a kext added with no bounds of
+/// its own.
 pub const KEXT_MIN_KERNEL: &str = "25.0.0";
 pub const KEXT_MAX_KERNEL: &str = "25.99.99";
 
@@ -99,12 +90,12 @@ pub struct Options {
     pub graphical_picker: bool,
     /// The picker at every boot, or none: OpenCore boots the default entry.
     pub show_picker: bool,
-    /// Lilu and ReimsVgpu, for macOS 26.
+    /// Lilu, for macOS 26.
     pub kexts: bool,
 }
 
-/// The config.plist for `o`, from the release's `sample`. `added` (added.rs) loads after Lilu and
-/// ReimsVgpu, or alone when `o.kexts` leaves them out.
+/// The config.plist for `o`, from the release's `sample`. `added` (added.rs) loads after Lilu, or
+/// alone when `o.kexts` leaves Lilu out.
 pub fn make(sample: &[u8], o: &Options, added: &[added::Kext]) -> Result<Vec<u8>> {
     let mut root: Value = plist::from_bytes(sample).context("read Sample.plist")?;
     let c = root
@@ -311,8 +302,8 @@ pub fn make(sample: &[u8], o: &Options, added: &[added::Kext]) -> Result<Vec<u8>
     Ok(out)
 }
 
-/// Kernel > Add's entries, made from the sample's first: with `own`, Lilu and ReimsVgpu for
-/// macOS 26, then `added`, in its order, on the Darwin versions each was given.
+/// Kernel > Add's entries, made from the sample's first: with `own`, Lilu for macOS 26, then
+/// `added`, in its order, on the Darwin versions each was given.
 fn kernel_add(template: &Dictionary, own: bool, added: &[added::Kext]) -> Vec<Value> {
     let mut add = Vec::new();
     if own {
@@ -322,13 +313,6 @@ fn kernel_add(template: &Dictionary, own: bool, added: &[added::Kext]) -> Vec<Va
             KEXT_MIN_KERNEL,
             KEXT_MAX_KERNEL,
             "Patch engine",
-        ));
-        add.push((
-            REIMS_VGPU.bundle,
-            Some(REIMS_VGPU.executable),
-            KEXT_MIN_KERNEL,
-            KEXT_MAX_KERNEL,
-            "reims-vgpu's GPU features on macOS 26",
         ));
     }
     for k in added {
@@ -456,15 +440,9 @@ mod tests {
             KEXT_MIN_KERNEL,
             KEXT_MAX_KERNEL,
         );
-        let reims = want(
-            "ReimsVgpu.kext",
-            "Contents/MacOS/ReimsVgpu",
-            KEXT_MIN_KERNEL,
-            KEXT_MAX_KERNEL,
-        );
 
-        // Lilu and ReimsVgpu alone, or nothing.
-        assert_eq!(entries(true, &[]), [lilu.clone(), reims.clone()]);
+        // Lilu alone, or nothing.
+        assert_eq!(entries(true, &[]), std::slice::from_ref(&lilu));
         assert!(entries(false, &[]).is_empty());
 
         // Added kexts follow, in their order, on their own bounds; one with no code has no path.
@@ -483,28 +461,11 @@ mod tests {
                 "25.99.99",
             ),
         ];
-        let mut all = vec![lilu, reims];
+        let mut all = vec![lilu];
         all.extend(tail.clone());
         assert_eq!(entries(true, &set), all);
         assert_eq!(entries(false, &set), tail);
-        let e = &kernel_add(&template, true, &set)[2];
+        let e = &kernel_add(&template, true, &set)[1];
         assert_eq!(fields(e, &["Comment"]), ["t.Loader"]);
-    }
-
-    /// ReimsVgpu's identifier here is the one its Info.plist gives.
-    #[test]
-    fn own_identifiers() {
-        let info: Dictionary = plist::from_bytes(include_bytes!(
-            "../../kext/ReimsVgpu.kext/Contents/Info.plist"
-        ))
-        .unwrap();
-        assert_eq!(
-            info["CFBundleIdentifier"].as_string(),
-            Some(REIMS_VGPU.identifier)
-        );
-        assert_eq!(
-            info["CFBundleExecutable"].as_string(),
-            Some(REIMS_VGPU.executable)
-        );
     }
 }

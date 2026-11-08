@@ -1,7 +1,7 @@
-//! Kexts given with `--add-kext`, which the image carries after its own (Lilu and ReimsVgpu), in
-//! the order given: reims-vgpu's guest kexts for its own GPU device, for one. Each is a bundle on
-//! disk, copied whole into `EFI/OC/Kexts` (dotfiles left out), and loaded by a Kernel > Add entry
-//! made from its Info.plist and the Darwin versions it was given (config.rs).
+//! Kexts given with `--add-kext`, which the image carries after its own, Lilu, in the order given:
+//! reims-vgpu's guest kexts for its own GPU device, for one. Each is a bundle on disk, copied
+//! whole into `EFI/OC/Kexts` (dotfiles left out), and loaded by a Kernel > Add entry made from its
+//! Info.plist and the Darwin versions it was given (config.rs).
 
 use super::config;
 use anyhow::{Context, Result, bail};
@@ -240,7 +240,7 @@ pub fn check(own: &[config::Kext], own_in: bool, added: &[Kext]) -> Result<()> {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
-    use crate::opencore::config::{LILU, REIMS_VGPU};
+    use crate::opencore::config::LILU;
 
     fn spec(path: &str, min: &str, max: &str) -> Spec {
         Spec {
@@ -432,7 +432,7 @@ pub(crate) mod tests {
 
     #[test]
     fn checked_against_the_image() {
-        let own = [LILU, REIMS_VGPU];
+        let own = [LILU];
         let ok = [
             kext("Loader.kext", "t.loader", &["as.vit9696.Lilu"]),
             kext("Shim.kext", "t.shim", &["com.apple.kpi.iokit"]),

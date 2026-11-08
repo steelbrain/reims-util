@@ -79,14 +79,9 @@ another with `--model`:
 
 What's in the image, and why:
 
-- **Two kexts, which load on macOS 26 alone**: Lilu, and its plugin ReimsVgpu.kext, from this
-  repository's `kext/`. macOS drives reims-vgpu's GPU with its own driver, whose x86-64 build
-  asks the device for an old interface version (6) and turns every later feature off. The kext
-  has it ask for the one arm64 guests use (245), and patches what the driver and its Metal plugin
-  hardcode, so Metal offers the GPU families GPU-accelerated Chrome needs, and D32S8
-  depth/stencil textures. `--no-kexts` leaves them out, and the boot argument `-reimsvgpuoff`
-  turns the kext off. Kexts you add with `--add-kext` load after these
-  ([below](#adding-kexts)). There are no others: QEMU's `isa-applesmc` is the SMC.
+- **Lilu, which loads on macOS 26 alone**: kexts you add with `--add-kext` load after it
+  ([below](#adding-kexts)), and can link against it, as reims-vgpu's guest kexts do.
+  `--no-kexts` leaves it out. There are no other kexts: QEMU's `isa-applesmc` is the SMC.
 - **The drivers a VM boots with**: OpenRuntime, OpenHfsPlus (recovery images and installers are
   HFS+), OpenPartitionDxe (for older recovery images) and ResetNvramEntry.
 - **No boot picker**: OpenCore boots the default entry, the disk macOS last chose as its startup
@@ -109,9 +104,8 @@ arguments, and `--verbose-boot` shows the kernel's messages while it boots.
 
 #### Adding kexts
 
-`--add-kext` puts a kext bundle of your own in the image, after Lilu and ReimsVgpu.kext. Repeat
-it for more: they load in the order you give them, so give a kext after the ones it links
-against.
+`--add-kext` puts a kext bundle of your own in the image, after Lilu. Repeat it for more: they
+load in the order you give them, so give a kext after the ones it links against.
 
 ```sh
 reims-util opencore -o OpenCore.qcow2 \
@@ -120,12 +114,12 @@ reims-util opencore -o OpenCore.qcow2 \
 
 Each value is `PATH[,MIN[,MAX]]`: the bundle, then the Darwin versions it loads on, as OpenCore's
 MinKernel and MaxKernel take them (25.4.0 is macOS 26.4). Left out, they're 25.0.0 and 25.99.99,
-macOS 26, as for the image's own kexts. The bundle is copied whole into `EFI/OC/Kexts`, without
-its dotfiles, and OpenCore loads the executable its Info.plist names, or none for a kext with no
-code. reims-util refuses a kext with the name or bundle identifier of one already in the image
-(the image's FAT32 partition doesn't tell names apart by case), and one that links against a kext
-given after it, or against Lilu when `--no-kexts` leaves Lilu out. `--no-kexts` leaves out
-reims-util's own kexts alone: the ones you add still go in.
+macOS 26, as for Lilu. The bundle is copied whole into `EFI/OC/Kexts`, without its dotfiles, and
+OpenCore loads the executable its Info.plist names, or none for a kext with no code. reims-util
+refuses a kext with the name or bundle identifier of one already in the image (the image's FAT32
+partition doesn't tell names apart by case), and one that links against a kext given after it, or
+against Lilu when `--no-kexts` leaves Lilu out. `--no-kexts` leaves out Lilu alone: the kexts you
+add still go in, so you can give a Lilu of your own, ahead of the kexts that link against it.
 
 ### Online installers
 
@@ -197,26 +191,9 @@ versions, or `{"event":"error","message":"…"}`.
 reims-util --json online-installer tahoe -o ~/vms/mac
 ```
 
-## The kexts
-
-`kext/` holds ReimsVgpu.kext, the kext reims-util puts in its images, built: a kext builds on a
-Mac alone, while reims-util builds anywhere. After changing its source, rebuild it on a Mac with
-Xcode, and commit the built kext with the change:
-
-```sh
-cd kext
-make LILU=path/to/Lilu.kext KERNEL_SDK=path/to/MacKernelSDK
-```
-
-`LILU` is a DEBUG build of Lilu 1.7.2, the version the image carries, from
-[Lilu's releases](https://github.com/acidanthera/Lilu/releases), and `KERNEL_SDK` a checkout of
-[MacKernelSDK](https://github.com/acidanthera/MacKernelSDK). With the same Xcode, the same
-source builds the same bytes. `make` also writes `kext/sources.sha256`, what the kext was built
-from, and `cargo test` fails when the source no longer matches it.
-
 ## License
 
 reims-util is licensed under GPL-2.0-or-later OR LGPL-3.0-or-later; see [LICENSE](LICENSE). The
-serial number tables come from OpenCorePkg's macserial, and the built ReimsVgpu.kext holds code
-of Lilu's, each under its BSD-3-Clause license. OpenCore, its picker icons and chime
-(OcBinaryData), Lilu and OVMF, which reims-util downloads, keep their own licenses.
+serial number tables come from OpenCorePkg's macserial, under its BSD-3-Clause license.
+OpenCore, its picker icons and chime (OcBinaryData), Lilu and OVMF, which reims-util downloads,
+keep their own licenses.

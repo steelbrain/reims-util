@@ -19,11 +19,6 @@ OpenCorePkg's macserial (Copyright (c) 2018-2020 vit9696, Copyright (c) 2020
 Matis Schotte), so that file is also under OpenCorePkg's BSD-3-Clause license:
 LICENSES/BSD-3-Clause-OpenCorePkg.txt.
 
-kext/ReimsVgpu.kext, the kext built from kext/src, also holds code from Lilu
-(Copyright (c) 2016-2018 vit9696): its plugin_start.cpp, and what Lilu's
-headers define. That code is under Lilu's BSD-3-Clause license:
-LICENSES/BSD-3-Clause-Lilu.txt.
-
 What reims-util downloads and writes into images, such as OpenCore, Lilu and
 OVMF, is not part of the repository, and keeps its own license; OVMF's
 licenses are written beside OVMF_CODE.fd. The crates the build takes from crates.io keep

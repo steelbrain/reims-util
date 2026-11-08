@@ -1,4 +1,1 @@
 /target
-
-# The guest kext's objects, when make runs in kext/; the kext itself is kept.
-/kext/build/

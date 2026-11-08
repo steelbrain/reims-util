@@ -1,9 +1,8 @@
 //! The OpenCore boot image: a 128 MiB GPT disk whose EFI system partition holds a pinned
 //! OpenCore release, the drivers and ACPI table a VM needs, the picker's icons and the boot chime
-//! from a pinned commit of OcBinaryData, a pinned Lilu release and its plugin ReimsVgpu.kext
-//! (kext/), the kexts given with `--add-kext` (added.rs), and a `config.plist` made for a q35 VM
-//! (config.rs) with an SMBIOS identity of its own (smbios.rs). OVMF goes beside it (ovmf.rs),
-//! where reims-ctl looks for it.
+//! from a pinned commit of OcBinaryData, a pinned Lilu release, the kexts given with `--add-kext`
+//! (added.rs), and a `config.plist` made for a q35 VM (config.rs) with an SMBIOS identity of its
+//! own (smbios.rs). OVMF goes beside it (ovmf.rs), where reims-ctl looks for it.
 
 pub mod acpi;
 pub mod added;
@@ -40,18 +39,14 @@ const RESOURCES_ROOT: &str = "OcBinaryData-32500d5e3313f11cad00351ba1c6f9a4aa6cb
 /// The boot chime, the image's only sound.
 const CHIME: &str = "Audio/OCEFIAudio_VoiceOver_Boot.mp3";
 
-/// Lilu, the release ReimsVgpu.kext is built against (kext/Makefile).
+/// Lilu, which kexts given with `--add-kext` may link against: reims-vgpu's guest kexts link
+/// against 1.7.2.
 const LILU_RELEASE: Pinned = Pinned {
     name: "Lilu-1.7.2-RELEASE.zip",
     url: "https://github.com/acidanthera/Lilu/releases/download/1.7.2/Lilu-1.7.2-RELEASE.zip",
     sha256: "53967d7dcfaab01023a33df2e969a89522f13d6654a6a56ac4711b62dabf3ab8",
     what: "Lilu 1.7.2",
 };
-
-/// ReimsVgpu.kext as kext/Makefile built it, on a Mac, into the repository.
-const REIMS_VGPU_PLIST: &[u8] = include_bytes!("../../kext/ReimsVgpu.kext/Contents/Info.plist");
-const REIMS_VGPU_EXECUTABLE: &[u8] =
-    include_bytes!("../../kext/ReimsVgpu.kext/Contents/MacOS/ReimsVgpu");
 
 /// The image's size: room for OpenCore (about 2 MiB of it here) and for what a person may add.
 const DISK_SIZE: u64 = 128 << 20;
@@ -60,7 +55,7 @@ const DISK_SIZE: u64 = 128 << 20;
 pub struct Options {
     pub output: PathBuf,
     pub config: config::Options,
-    /// Kexts to load after Lilu and ReimsVgpu, in this order.
+    /// Kexts to load after Lilu, in this order.
     pub add_kexts: Vec<added::Spec>,
     /// Where OVMF's files go, or None to write none.
     pub ovmf_dir: Option<PathBuf>,
@@ -191,9 +186,9 @@ fn files(
     Ok(files)
 }
 
-/// The kexts' files: Lilu's from its release, and ReimsVgpu's.
+/// Lilu's files, from its release.
 fn kexts(lilu_zip: &Path) -> Result<Vec<(String, Vec<u8>)>> {
-    use config::{LILU, REIMS_VGPU};
+    use config::LILU;
     let f =
         std::fs::File::open(lilu_zip).with_context(|| format!("open {}", lilu_zip.display()))?;
     let mut zip = zip::ZipArchive::new(f).context("read Lilu's release")?;
@@ -210,17 +205,6 @@ fn kexts(lilu_zip: &Path) -> Result<Vec<(String, Vec<u8>)>> {
         e.read_to_end(&mut v)?;
         files.push((format!("EFI/OC/Kexts/{name}"), v));
     }
-    files.push((
-        format!("EFI/OC/Kexts/{}/Contents/Info.plist", REIMS_VGPU.bundle),
-        REIMS_VGPU_PLIST.to_vec(),
-    ));
-    files.push((
-        format!(
-            "EFI/OC/Kexts/{}/Contents/MacOS/{}",
-            REIMS_VGPU.bundle, REIMS_VGPU.executable
-        ),
-        REIMS_VGPU_EXECUTABLE.to_vec(),
-    ));
     Ok(files)
 }
 
@@ -268,38 +252,6 @@ fn resource_path(name: &str, graphical: bool) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// kext/ReimsVgpu.kext is built from the sources beside it: kext/sources.sha256, which
-    /// kext/Makefile writes with the kext, names each of them with its SHA-256 now.
-    #[test]
-    fn reims_vgpu_built_from_its_sources() {
-        let rebuild = "run make in kext/ on a Mac, and commit ReimsVgpu.kext and sources.sha256";
-        let kext = Path::new(env!("CARGO_MANIFEST_DIR")).join("kext");
-        let manifest = std::fs::read_to_string(kext.join("sources.sha256")).unwrap();
-        let mut built = Vec::new();
-        for line in manifest.lines() {
-            let (sha256, name) = line.split_once("  ").unwrap();
-            let now = crate::http::sha256_file(&kext.join(name)).unwrap();
-            assert_eq!(
-                now, sha256,
-                "kext/{name} changed since the kext was built: {rebuild}"
-            );
-            built.push(name.to_string());
-        }
-        let mut sources = vec!["Makefile".to_string()];
-        for e in std::fs::read_dir(kext.join("src")).unwrap() {
-            let name = e.unwrap().file_name().to_string_lossy().into_owned();
-            if !name.starts_with('.') {
-                sources.push(format!("src/{name}"));
-            }
-        }
-        built.sort();
-        sources.sort();
-        assert_eq!(
-            built, sources,
-            "the kext was built from other files: {rebuild}"
-        );
-    }
 
     #[test]
     fn resources_taken() {
