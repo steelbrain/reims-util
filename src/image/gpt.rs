@@ -18,12 +18,20 @@ pub const ESP_TYPE: [u8; 16] = guid(
 );
 
 /// Microsoft's basic data partition type, EBD0A0A2-B9E5-4433-87C0-68B6B72699C7, which FAT32
-/// and exFAT volumes that are not EFI system partitions take.
+/// volumes that are not EFI system partitions take.
 pub const BASIC_DATA_TYPE: [u8; 16] = guid(
     0xEBD0A0A2,
     0xB9E5,
     0x4433,
     [0x87, 0xC0, 0x68, 0xB6, 0xB7, 0x26, 0x99, 0xC7],
+);
+
+/// Apple's HFS Plus partition type, 48465300-0000-11AA-AA11-00306543ECAC.
+pub const HFS_PLUS_TYPE: [u8; 16] = guid(
+    0x48465300,
+    0x0000,
+    0x11AA,
+    [0xAA, 0x11, 0x00, 0x30, 0x65, 0x43, 0xEC, 0xAC],
 );
 
 /// A GUID in its on-disk form: the first three fields little-endian.

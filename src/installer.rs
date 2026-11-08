@@ -308,7 +308,7 @@ fn check_toc(f: &mut File, offset: u64, digest: &str) -> Result<()> {
 }
 
 /// The command that installs macOS from an installer image, in Recovery's Terminal: the image's
-/// exFAT volume, labelled `Installer`, mounts at `/Volumes/Installer`.
+/// HFS Plus volume, labelled `Installer`, mounts at `/Volumes/Installer`.
 pub const IMAGE_COMMAND: &str = "sh /Volumes/Installer/install-macos.sh";
 
 #[derive(Clone, Debug, serde::Serialize)]
@@ -325,7 +325,8 @@ const BASE_SYSTEM: &str = "BaseSystem.dmg";
 
 /// Makes `inst`'s offline installer in `dir`: a disk image, which reims-ctl attaches as the VM's
 /// installer, named `macOS-<name>-<version>-<build>-offline-installer.img`, of two volumes:
-/// - exFAT `Installer` (FAT32 holds no file of 4 GiB): `InstallAssistant.pkg`, and
+/// - HFS Plus `Installer` (FAT32 holds no file of 4 GiB, and the Recovery of macOS 14 and 15
+///   mounts no exFAT volume by itself): `InstallAssistant.pkg`, and
 ///   `install-macos.sh`, which Recovery's Terminal runs to put the package's Install macOS app on
 ///   the VM's disk and start the app's `startosinstall`;
 /// - FAT32 `RECOVERY`: the recovery image of the same macOS (major version), as
@@ -389,7 +390,7 @@ pub fn offline_installer(inst: &Installer, dir: &Path, r: &dyn Reporter) -> Resu
     // changes size between runs.
     let disk = image::data_disk(&[
         Volume {
-            fs: Fs::Exfat,
+            fs: Fs::HfsPlus,
             label: "Installer",
             name: "macOS Installer",
             files: &install_files,

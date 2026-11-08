@@ -1,14 +1,14 @@
-//! Disk images: GPT disks of FAT32 and exFAT volumes holding given files, written as a raw image
-//! or as qcow2.
+//! Disk images: GPT disks of FAT32 and HFS Plus volumes holding given files, written as a raw
+//! image or as qcow2.
 //!
 //! A disk is made as the byte ranges it holds ([`Disk`]): the volumes' structures and small files
 //! in memory, and room for big files that are downloaded into the image where they belong
 //! ([`Data::Reserved`], [`open_raw`]), so an installer image of up to 20 GB is never in memory,
 //! or on disk twice.
 
-pub mod exfat;
 pub mod fat32;
 pub mod gpt;
+pub mod hfsplus;
 pub mod qcow2;
 
 use anyhow::{Context, Result, bail, ensure};
@@ -139,7 +139,7 @@ pub fn esp_disk(size: u64, label: &str, files: &[(String, Data)]) -> Result<Disk
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Fs {
     Fat32,
-    Exfat,
+    HfsPlus,
 }
 
 /// A volume for [`data_disk`]: its file system, volume label, partition name, and files.
@@ -150,14 +150,15 @@ pub struct Volume<'a> {
     pub files: &'a [(String, Data)],
 }
 
-/// A GPT disk of `volumes`, in order, each a basic data partition just big enough for its files
-/// and starting on a MiB boundary.
+/// A GPT disk of `volumes`, in order, each a partition just big enough for its files and
+/// starting on a MiB boundary: a basic data partition for FAT32, an Apple HFS one for HFS Plus.
 pub fn data_disk(volumes: &[Volume]) -> Result<Disk> {
     const MIB: u64 = 1 << 20;
     let sizes: Vec<u64> = volumes.iter().map(|v| fit(v.files)).collect();
     // The first MiB for the primary table, and one at the end for the backup.
     let size = MIB + sizes.iter().sum::<u64>() + MIB;
-    let now = fat32::dos_time(std::time::SystemTime::now());
+    let clock = std::time::SystemTime::now();
+    let now = fat32::dos_time(clock);
     let mut pieces = Vec::new();
     let mut parts = Vec::new();
     let mut at = MIB;
@@ -165,11 +166,14 @@ pub fn data_disk(volumes: &[Volume]) -> Result<Disk> {
         let first = at / gpt::SECTOR;
         let volume = match v.fs {
             Fs::Fat32 => fat32::make(len, u32::try_from(first)?, v.label, serial()?, v.files, now)?,
-            Fs::Exfat => exfat::make(len, first, v.label, serial()?, v.files, now)?,
+            Fs::HfsPlus => hfsplus::make(len, v.label, volume_id()?, v.files, clock)?,
         };
         pieces.extend(volume.into_iter().map(|(o, d)| (at + o, d)));
         parts.push(gpt::Partition {
-            type_guid: gpt::BASIC_DATA_TYPE,
+            type_guid: match v.fs {
+                Fs::Fat32 => gpt::BASIC_DATA_TYPE,
+                Fs::HfsPlus => gpt::HFS_PLUS_TYPE,
+            },
             guid: gpt::random_guid()?,
             first_lba: first,
             last_lba: first + len / gpt::SECTOR - 1,
@@ -181,9 +185,10 @@ pub fn data_disk(volumes: &[Volume]) -> Result<Disk> {
     Ok(Disk { size, pieces })
 }
 
-/// A volume size that holds `files`: their bytes, each rounded up to the largest cluster either
-/// file system here uses (128 KiB), plus 1/64 for the FATs (FAT32's two, of 512-byte clusters,
-/// take 1/64 of a small volume) and 16 MiB for the rest, in whole MiB, 64 MiB at least.
+/// A volume size that holds `files`: their bytes, each rounded up to 128 KiB (more than either
+/// file system here rounds a file to), plus 1/64 for the FATs (FAT32's two, of 512-byte
+/// clusters, take 1/64 of a small volume) and 16 MiB for the rest (HFS Plus's B-trees take
+/// 1.5 MiB), in whole MiB, 64 MiB at least.
 fn fit(files: &[(String, Data)]) -> u64 {
     let data: u64 = files
         .iter()
@@ -192,6 +197,13 @@ fn fit(files: &[(String, Data)]) -> u64 {
     (data + data / 64 + (16 << 20))
         .max(64 << 20)
         .next_multiple_of(1 << 20)
+}
+
+/// A random identifier for an HFS Plus volume, which macOS makes its volume UUID from.
+fn volume_id() -> Result<[u8; 8]> {
+    let mut id = [0u8; 8];
+    getrandom::fill(&mut id).map_err(|e| anyhow::anyhow!("random: {e}"))?;
+    Ok(id)
 }
 
 fn serial() -> Result<u32> {
@@ -277,7 +289,7 @@ mod tests {
     #[test]
     fn data_disk_lays_volumes_end_to_end() {
         let fat_files = vec![("a/b.txt".to_string(), Data::Bytes(vec![1; 100]))];
-        let ex_files = vec![("c.bin".to_string(), Data::Bytes(vec![2; 70_000]))];
+        let hfs_files = vec![("c.bin".to_string(), Data::Bytes(vec![2; 70_000]))];
         let disk = data_disk(&[
             Volume {
                 fs: Fs::Fat32,
@@ -286,10 +298,10 @@ mod tests {
                 files: &fat_files,
             },
             Volume {
-                fs: Fs::Exfat,
+                fs: Fs::HfsPlus,
                 label: "Installer",
                 name: "two",
-                files: &ex_files,
+                files: &hfs_files,
             },
         ])
         .unwrap();
@@ -297,12 +309,14 @@ mod tests {
         assert_eq!(disk.size, 130 << 20);
         let bytes = disk.to_bytes().unwrap();
         assert_eq!(&bytes[(1 << 20) + 82..(1 << 20) + 90], b"FAT32   ");
-        assert_eq!(&bytes[(65 << 20) + 3..(65 << 20) + 11], b"EXFAT   ");
+        assert_eq!(&bytes[(65 << 20) + 1024..(65 << 20) + 1026], b"H+");
         let entry = |i: usize| &bytes[1024 + i * 128..1024 + (i + 1) * 128];
         let u64_at = |e: &[u8], o: usize| u64::from_le_bytes(e[o..o + 8].try_into().unwrap());
         assert_eq!(u64_at(entry(0), 32), 2048);
         assert_eq!(u64_at(entry(1), 32), 65 << 11);
         assert_eq!(u64_at(entry(1), 40), (129 << 11) - 1);
+        assert_eq!(&entry(0)[..16], &gpt::BASIC_DATA_TYPE);
+        assert_eq!(&entry(1)[..16], &gpt::HFS_PLUS_TYPE);
     }
 
     #[test]

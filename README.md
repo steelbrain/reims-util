@@ -145,7 +145,9 @@ Recovery always installs the newest release of its macOS, downloaded as it goes.
 particular one, such as 26.6.2 when 26.7.1 is out, or to install with no network, make an offline
 installer: a disk image, `macOS-<name>-<version>-<build>-offline-installer.img`, of 13 to 20 GB.
 It holds the recovery image of that macOS, which OpenCore boots as it would from a USB stick, and
-Apple's full installer for that release, with a script that installs it.
+Apple's full installer for that release, with a script that installs it, on an HFS+ volume named
+Installer: Recovery mounts HFS+ by itself on every macOS from 11 to 26, while the Recovery of
+macOS 14 and 15 mounts no exFAT or FAT32 volume by itself.
 
 `offline-installer list` shows the releases Apple's software update catalog has for Intel Macs;
 macOS 27 runs on Apple silicon only, so it isn't there. Name one by version (`26.6.2`, or `26` for
