@@ -413,4 +413,67 @@ mod tests {
         let e = &kernel_add(&template, &set)[0];
         assert_eq!(fields(e, &["Comment"]), ["t.Loader"]);
     }
+
+    /// reims-ctl's command line: reims-vgpu's kexts, each by its path alone, Graft first.
+    #[test]
+    fn kernel_add_from_the_command_line() {
+        use clap::Parser;
+        let graft = added::tests::info("t.graft", Some("Graft"), &[]);
+        let gfx = added::tests::info("t.gfx", Some("ReimsGraphics"), &[]);
+        let gate = added::tests::info("t.gate", Some("RgfxGate"), &["t.graft"]);
+        let bundles = [
+            ("Graft", &graft),
+            ("ReimsGraphics", &gfx),
+            ("RgfxGate", &gate),
+        ]
+        .map(|(name, plist)| {
+            added::tests::Bundle::new(
+                &format!("{name}.kext"),
+                &[
+                    ("Contents/Info.plist", plist),
+                    (&format!("Contents/MacOS/{name}"), &[0xcf]),
+                ],
+            )
+        });
+        let mut argv = vec!["reims-util".to_string(), "opencore".to_string()];
+        for b in &bundles {
+            argv.push("--add-kext".into());
+            argv.push(b.path.display().to_string());
+        }
+        let Some(crate::cli::Command::Opencore(a)) =
+            crate::cli::Cli::try_parse_from(argv).unwrap().command
+        else {
+            panic!("not the opencore command");
+        };
+        let o = crate::cli::opencore_options(&a).unwrap();
+        let kexts = o
+            .add_kexts
+            .iter()
+            .map(added::read)
+            .collect::<Result<Vec<_>>>()
+            .unwrap();
+        added::check(&kexts).unwrap();
+
+        let mut template = Dictionary::new();
+        template.insert("BundlePath".into(), "Sample.kext".into());
+        template.insert("Enabled".into(), false.into());
+        let got: Vec<Vec<String>> = kernel_add(&template, &kexts)
+            .iter()
+            .map(|e| {
+                assert_eq!(e.as_dictionary().unwrap()["Enabled"], Value::Boolean(true));
+                fields(
+                    e,
+                    &["BundlePath", "ExecutablePath", "MinKernel", "MaxKernel"],
+                )
+            })
+            .collect();
+        assert_eq!(
+            got,
+            [
+                ["Graft.kext", "Contents/MacOS/Graft", "", ""],
+                ["ReimsGraphics.kext", "Contents/MacOS/ReimsGraphics", "", ""],
+                ["RgfxGate.kext", "Contents/MacOS/RgfxGate", "", ""],
+            ]
+        );
+    }
 }
