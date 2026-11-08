@@ -180,7 +180,9 @@ pressed Ctrl-C, the network dropped or the machine went to sleep, run the same c
 what's there is checked against Apple's chunklists and the download continues from there. An
 installer that's already complete and checks out isn't downloaded again, and one that doesn't is
 repaired. An offline installer whose recovery image Apple has since replaced is left as it is: it
-still boots, and a VM may be using it.
+still boots, and a VM may be using it. One an earlier reims-util made, with its installer on an
+exFAT volume, is made again with the installer it already holds, which is checked as a download
+is, rather than downloaded again; the old image is replaced once the new one checks out.
 
 ### For scripts
 

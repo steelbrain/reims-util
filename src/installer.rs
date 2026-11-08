@@ -22,6 +22,7 @@ use crate::recovery;
 use anyhow::{Context, Result, bail};
 use plist::Value;
 use std::fs::File;
+use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -283,7 +284,6 @@ pub fn find<'a>(list: &'a [Installer], q: &str) -> Option<&'a Installer> {
 /// 28 bytes, then the zlib-compressed table of contents, whose SHA-1 also opens the heap).
 fn check_toc(f: &mut File, offset: u64, digest: &str) -> Result<()> {
     use sha1::Digest;
-    use std::io::{Read, Seek, SeekFrom};
     f.seek(SeekFrom::Start(offset))?;
     let mut h = [0u8; 28];
     f.read_exact(&mut h)?;
@@ -444,8 +444,24 @@ pub fn offline_installer(inst: &Installer, dir: &Path, r: &dyn Reporter) -> Resu
             }
             return Ok(out);
         }
-        std::fs::rename(&path, http::part_path(&path))
-            .with_context(|| format!("rename {}", path.display()))?;
+        if let Some(old) = exfat_file(&mut f, PACKAGE, inst.size) {
+            // An image an earlier reims-util made, the package on an exFAT volume, which the
+            // Recovery of macOS 14 and 15 doesn't mount. Its package goes into a new image of
+            // this layout, and so does its recovery image, at the same place in both; both are
+            // checked and finished below as any download is, and the new image replaces the
+            // old one only once it checks out.
+            r.step(&format!(
+                "Moving {}'s installer from {} onto an HFS Plus volume",
+                inst.label(),
+                path.display()
+            ));
+            let mut new = image::open_raw(&disk, &http::part_path(&path))?;
+            copy_range(&mut f, old, &mut new, pkg_at, inst.size)?;
+            copy_range(&mut f, dmg_at, &mut new, dmg_at, rec.size())?;
+        } else {
+            std::fs::rename(&path, http::part_path(&path))
+                .with_context(|| format!("rename {}", path.display()))?;
+        }
     }
 
     let part = http::part_path(&path);
@@ -490,6 +506,64 @@ fn holds(
     let good = check.resume(f, offset, len, r)?;
     check.restart_at(0);
     Ok(good == len)
+}
+
+/// Where an image of the earlier layout holds file `name` of `len` bytes: reims-util wrote its
+/// first partition as exFAT, the file's entry in the root folder, the root folder in one
+/// cluster, and each file in consecutive clusters. None for any other image.
+fn exfat_file(f: &mut File, name: &str, len: u64) -> Option<u64> {
+    let mut read = |at: u64, n: usize| -> Option<Vec<u8>> {
+        let mut b = vec![0u8; n];
+        f.seek(SeekFrom::Start(at)).ok()?;
+        f.read_exact(&mut b).ok()?;
+        Some(b)
+    };
+    let le32 = |b: &[u8], at: usize| u32::from_le_bytes([b[at], b[at + 1], b[at + 2], b[at + 3]]);
+    // The first GPT entry's first sector, then that volume's boot sector.
+    let entry = read(1024, 128)?;
+    let start = (u64::from(le32(&entry, 32)) | u64::from(le32(&entry, 36)) << 32) * 512;
+    let boot = read(start, 512)?;
+    if &boot[3..11] != b"EXFAT   " || boot[108] > 12 || boot[109] > 25 {
+        return None;
+    }
+    let sector = 1u64 << boot[108];
+    let per_cluster = 1u64 << boot[109];
+    let heap = u64::from(le32(&boot, 88));
+    let at = |c: u32| start + (heap + u64::from(c).saturating_sub(2) * per_cluster) * sector;
+    let root = read(
+        at(le32(&boot, 96)),
+        usize::try_from(per_cluster * sector).ok()?,
+    )?;
+    let want: Vec<u16> = name.encode_utf16().collect();
+    let (entries, _) = root.as_chunks::<32>();
+    for (i, e) in entries.iter().enumerate() {
+        // A file's entry set: the file entry, its stream extension, its name in 15s.
+        if e[0] != 0x85 || i + 2 >= entries.len() || entries[i + 1][0] != 0xc0 {
+            continue;
+        }
+        let stream = &entries[i + 1][..];
+        let units = usize::from(stream[3]);
+        let got: Vec<u16> = entries[i + 2..]
+            .iter()
+            .take_while(|n| n[0] == 0xc1)
+            .flat_map(|n| n[2..].as_chunks().0.iter().copied().map(u16::from_le_bytes))
+            .take(units)
+            .collect();
+        let size = u64::from(le32(stream, 24)) | u64::from(le32(stream, 28)) << 32;
+        if got == want && size == len {
+            return Some(at(le32(stream, 20)));
+        }
+    }
+    None
+}
+
+/// Copies up to `len` bytes at `from` in `src` to `to` in `dst`, as many as `src` has (by
+/// copy_file_range on Linux, which shares the blocks where the file system can).
+fn copy_range(src: &mut File, from: u64, dst: &mut File, to: u64, len: u64) -> Result<()> {
+    src.seek(SeekFrom::Start(from))?;
+    dst.seek(SeekFrom::Start(to))?;
+    std::io::copy(&mut Read::by_ref(src).take(len), dst)?;
+    Ok(())
 }
 
 /// The script on an installer image that installs its macOS from Recovery's Terminal.
@@ -591,6 +665,56 @@ mod tests {
             <string>26.7.1</string>
         </dict>
     </auxinfo></installer-gui-script>"#;
+
+    #[test]
+    fn finds_the_package_in_an_earlier_exfat_image() {
+        // The earlier layout as reims-util wrote it: the first GPT entry at 1 MiB, an exFAT boot
+        // sector there (512-byte sectors, 4 KiB clusters, the heap at sector 256, the root folder
+        // in cluster 4), and the package's entry set in the root folder.
+        let mut img = vec![0u8; 3 << 20];
+        img[1024 + 32..1024 + 40].copy_from_slice(&2048u64.to_le_bytes());
+        let v = 1 << 20;
+        img[v + 3..v + 11].copy_from_slice(b"EXFAT   ");
+        img[v + 88..v + 92].copy_from_slice(&256u32.to_le_bytes());
+        img[v + 96..v + 100].copy_from_slice(&4u32.to_le_bytes());
+        img[v + 108] = 9;
+        img[v + 109] = 3;
+        let root = v + (256 + 2 * 8) * 512;
+        let e = |i: usize| root + i * 32;
+        let name: Vec<u16> = PACKAGE.encode_utf16().collect();
+        let len = 5u64 << 30;
+        img[e(0)] = 0x85;
+        img[e(0) + 1] = 3;
+        img[e(1)] = 0xc0;
+        img[e(1) + 3] = name.len() as u8;
+        img[e(1) + 20..e(1) + 24].copy_from_slice(&9u32.to_le_bytes());
+        img[e(1) + 24..e(1) + 32].copy_from_slice(&len.to_le_bytes());
+        for (k, part) in name.chunks(15).enumerate() {
+            let at = e(2 + k);
+            img[at] = 0xc1;
+            for (j, c) in part.iter().enumerate() {
+                img[at + 2 + 2 * j..at + 4 + 2 * j].copy_from_slice(&c.to_le_bytes());
+            }
+        }
+        let dir = std::env::temp_dir().join(format!("reims-util-exfat-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("old.img");
+        std::fs::write(&path, &img).unwrap();
+        let mut f = File::open(&path).unwrap();
+        // Cluster 9: the heap's start, then 7 clusters of 8 sectors.
+        let want = (1u64 << 20) + (256 + 7 * 8) * 512;
+        assert_eq!(exfat_file(&mut f, PACKAGE, len), Some(want));
+        assert_eq!(exfat_file(&mut f, PACKAGE, len + 1), None);
+        assert_eq!(exfat_file(&mut f, "install-macos.sh", len), None);
+        // An image of this layout has no exFAT volume.
+        img[v + 3..v + 11].fill(0);
+        std::fs::write(&path, &img).unwrap();
+        assert_eq!(
+            exfat_file(&mut File::open(&path).unwrap(), PACKAGE, len),
+            None
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 
     #[test]
     fn install_script_is_valid_sh() {

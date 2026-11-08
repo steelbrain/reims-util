@@ -156,7 +156,8 @@ VERSION is a version (26.7.1, or 26 for the newest 26), a build (25G241), Apple'
 a name (tahoe, for the newest Tahoe) or latest. The installer is
 macOS-<name>-<version>-<build>-offline-installer.img, a disk image of two volumes: the
 recovery image of the same macOS, which OpenCore boots, and Apple's full installer, with a
-script that installs it, on an HFS+ volume Recovery mounts by itself.
+script that installs it, on an HFS+ volume Recovery mounts by itself. An image an earlier
+reims-util made, its installer on exFAT, is made again from the installer it holds.
 
   reims-util offline-installer 26.7.1
   reims-ctl create mac --opencore OpenCore.qcow2 \\
