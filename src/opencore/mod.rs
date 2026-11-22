@@ -20,7 +20,9 @@ pub const VERSION: &str = "1.0.8";
 
 const RELEASE: Pinned = Pinned {
     name: "OpenCore-1.0.8-RELEASE.zip",
-    url: "https://github.com/acidanthera/OpenCorePkg/releases/download/1.0.8/OpenCore-1.0.8-RELEASE.zip",
+    urls: &[
+        "https://github.com/acidanthera/OpenCorePkg/releases/download/1.0.8/OpenCore-1.0.8-RELEASE.zip",
+    ],
     sha256: "2011e8b7216ecb2645d97ea710df965947edd406846e92050b9bc4190be6d27b",
     what: "OpenCore 1.0.8",
 };
@@ -28,7 +30,9 @@ const RELEASE: Pinned = Pinned {
 /// OcBinaryData, which has no releases: GitHub's archive of a commit.
 const RESOURCES: Pinned = Pinned {
     name: "OcBinaryData-32500d5e3313f11cad00351ba1c6f9a4aa6cb0f7.zip",
-    url: "https://github.com/acidanthera/OcBinaryData/archive/32500d5e3313f11cad00351ba1c6f9a4aa6cb0f7.zip",
+    urls: &[
+        "https://github.com/acidanthera/OcBinaryData/archive/32500d5e3313f11cad00351ba1c6f9a4aa6cb0f7.zip",
+    ],
     sha256: "1ced15b42352a3a6c1b76ca95951f337fa79899acfb4ed80f329191716623741",
     what: "OpenCore's picker icons and boot chime",
 };

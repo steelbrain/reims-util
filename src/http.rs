@@ -23,8 +23,9 @@ pub const SEGMENT: u64 = 64 << 20;
 /// How long a request may take to send its range: a stall is noticed within this. (On a
 /// connection too slow to send a whole range in it, each request sends what it can.)
 pub const SEGMENT_BUDGET: Duration = Duration::from_secs(180);
-/// Failed requests in a row, with no byte received between them, before a download gives up.
-const MAX_FAILURES: u32 = 10;
+/// Failed requests in a row, with no byte received between them, before a download gives up
+/// (unless its [`Download::tries`] says otherwise).
+pub const MAX_FAILURES: u32 = 10;
 
 pub type Headers = Vec<(String, String)>;
 
@@ -123,6 +124,9 @@ pub struct Download<'a> {
     /// For requests the server refuses (401, 403): new headers, such as a fresh asset token.
     pub refresh: Option<&'a mut dyn FnMut() -> Result<Headers>>,
     pub user_agent: Option<&'static str>,
+    /// Failed requests in a row, with no byte received between them, before it gives up:
+    /// [`MAX_FAILURES`], or fewer when there is another place to download the file from.
+    pub tries: u32,
 }
 
 impl Download<'_> {
@@ -134,6 +138,7 @@ impl Download<'_> {
             size: None,
             refresh: None,
             user_agent: None,
+            tries: MAX_FAILURES,
         }
     }
 }
@@ -249,7 +254,7 @@ pub fn download(
             Ok(resp) => resp,
             Err(e) => {
                 failures += 1;
-                retry_or_fail(&mut failures, &format!("{e}"), &d.url, r)?;
+                retry_or_fail(&mut failures, d.tries, &format!("{e}"), &d.url, r)?;
                 continue;
             }
         };
@@ -315,7 +320,7 @@ pub fn download(
             }
             408 | 429 | 500..=599 => {
                 failures += 1;
-                retry_or_fail(&mut failures, &format!("HTTP {status}"), &d.url, r)?;
+                retry_or_fail(&mut failures, d.tries, &format!("HTTP {status}"), &d.url, r)?;
                 continue;
             }
             _ => bail!("{} answered HTTP {status}", d.url),
@@ -341,7 +346,7 @@ pub fn download(
                         continue 'requests;
                     }
                     failures += 1;
-                    retry_or_fail(&mut failures, &format!("{e}"), &d.url, r)?;
+                    retry_or_fail(&mut failures, d.tries, &format!("{e}"), &d.url, r)?;
                     continue 'requests;
                 }
             };
@@ -384,9 +389,15 @@ pub fn download(
     Ok(())
 }
 
-fn retry_or_fail(failures: &mut u32, why: &str, url: &str, r: &dyn Reporter) -> Result<()> {
-    if *failures > MAX_FAILURES {
-        bail!("{url}: {why} (gave up after {MAX_FAILURES} tries; run again to resume)");
+fn retry_or_fail(
+    failures: &mut u32,
+    tries: u32,
+    why: &str,
+    url: &str,
+    r: &dyn Reporter,
+) -> Result<()> {
+    if *failures > tries {
+        bail!("{url}: {why} (gave up after {tries} tries; run again to resume)");
     }
     let wait = Duration::from_secs((1u64 << (*failures).min(5)).min(30));
     r.note(&format!(

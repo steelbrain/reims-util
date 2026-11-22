@@ -311,6 +311,7 @@ impl Image {
             size: Some(self.size()),
             refresh: Some(&mut refresh),
             user_agent: Some(USER_AGENT),
+            tries: http::MAX_FAILURES,
         };
         http::download(&self.agent, d, dest, check, r)
     }

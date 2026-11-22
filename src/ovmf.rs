@@ -1,5 +1,6 @@
 //! OVMF, the UEFI firmware an x86-64 VM boots OpenCore with: its code and its variable store,
-//! from Arch Linux's `edk2-ovmf` package, pinned.
+//! from Arch Linux's `edk2-ovmf` package, pinned. The package comes from the Arch Linux Archive,
+//! or, when that fails, from the archive's mirror in Umeå, which serves the same file.
 //!
 //! The pinned build is the one the reims-vgpu macOS 26 guest on homelab-ms01 boots: its
 //! `OVMF_CODE.4m.fd` and `OVMF_VARS.4m.fd` are those files' bytes. It is built without SMM and
@@ -17,7 +18,12 @@ pub const VERSION: &str = "edk2-ovmf 202608-1";
 
 const PACKAGE: Pinned = Pinned {
     name: "edk2-ovmf-202608-1-any.pkg.tar.zst",
-    url: "https://archive.archlinux.org/packages/e/edk2-ovmf/edk2-ovmf-202608-1-any.pkg.tar.zst",
+    // The Arch Linux Archive, then its mirror (Arch's infrastructure docs/servers.md, "Archive
+    // Mirrors").
+    urls: &[
+        "https://archive.archlinux.org/packages/e/edk2-ovmf/edk2-ovmf-202608-1-any.pkg.tar.zst",
+        "https://umea.archive.pkgbuild.com/packages/e/edk2-ovmf/edk2-ovmf-202608-1-any.pkg.tar.zst",
+    ],
     sha256: "bee34c6036ebd0e96562b7330d2d3ddf75e240cfc44a6d506a5ccb6390eafb91",
     what: "OVMF (Arch Linux's edk2-ovmf 202608-1)",
 };
@@ -87,4 +93,26 @@ pub fn write(dir: &Path, r: &dyn Reporter) -> Result<Outputs> {
         code: dir.join("OVMF_CODE.fd"),
         vars: dir.join("OVMF_VARS.fd"),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_source_is_the_archives_path_to_the_package() {
+        let path = format!("/packages/e/edk2-ovmf/{}", PACKAGE.name);
+        let hosts: Vec<&str> = PACKAGE
+            .urls
+            .iter()
+            .map(|u| u.strip_suffix(path.as_str()).unwrap())
+            .collect();
+        assert_eq!(
+            hosts,
+            [
+                "https://archive.archlinux.org",
+                "https://umea.archive.pkgbuild.com"
+            ]
+        );
+    }
 }

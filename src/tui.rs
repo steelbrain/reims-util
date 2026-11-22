@@ -171,15 +171,12 @@ impl App {
                 if r.cancel.load(Ordering::Relaxed) {
                     self.status = Some(("Stopped. Start it again to resume.".into(), false));
                 } else {
-                    // Above, where it's wrapped whole: an error often starts with a long URL.
+                    // Above, where it's wrapped whole: an error often starts with a long URL. An
+                    // error of several lines (every source of a download failing) keeps them.
                     let red = Style::new().fg(Color::Red);
-                    print_above(
-                        t,
-                        vec![
-                            Line::styled(format!("Failed: {}", r.title), red.bold()),
-                            Line::styled(format!("  {e}"), red),
-                        ],
-                    )?;
+                    let mut lines = vec![Line::styled(format!("Failed: {}", r.title), red.bold())];
+                    lines.extend(e.lines().map(|l| Line::styled(format!("  {l}"), red)));
+                    print_above(t, lines)?;
                     self.status = Some(("Failed: why is above.".into(), true));
                 }
                 self.screen = Screen::Menu(0);
